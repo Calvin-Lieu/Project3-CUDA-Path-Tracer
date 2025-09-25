@@ -4,12 +4,16 @@
 #include <cuda.h>
 #include <cmath>
 #include <climits>
+#include <utility>             
 #include <thrust/execution_policy.h>
 #include <thrust/random.h>
 #include <thrust/remove.h>
 #include <thrust/sort.h>
 #include <thrust/sequence.h>
 #include <thrust/gather.h>
+#include <thrust/for_each.h>
+#include <thrust/iterator/zip_iterator.h>
+#include <thrust/tuple.h>
 
 
 
@@ -55,6 +59,26 @@ struct IsDeadPath {
     }
 };
 
+// Mark t<0 misses as dead before sorting/shading
+struct MarkMissDead {
+    __host__ __device__
+        void operator()(thrust::tuple<PathSegment&, const ShadeableIntersection&> t) const {
+        PathSegment& p = thrust::get<0>(t);
+        const ShadeableIntersection& isect = thrust::get<1>(t);
+        if (isect.t < 0.0f) {
+            p.color = glm::vec3(0.0f);
+            p.remainingBounces = 0;
+        }
+    }
+};
+
+// Zip predicate: compact paths+intersections together
+struct IsDeadTuple {
+    __host__ __device__
+        bool operator()(const thrust::tuple<PathSegment, ShadeableIntersection>& t) const {
+        return thrust::get<0>(t).remainingBounces <= 0;
+    }
+};
 
 __host__ __device__
 thrust::default_random_engine makeSeededRandomEngine(int iter, int index, int depth)
@@ -96,10 +120,11 @@ static PathSegment* dev_paths = NULL;
 static ShadeableIntersection* dev_intersections = NULL;
 // TODO: static variables for device memory, any extra info you need, etc
 // ...
-static int* dev_matKeys = nullptr;
-static int* dev_indices = nullptr;
-static PathSegment* dev_paths_tmp = nullptr;
-static ShadeableIntersection* dev_intersections_tmp = nullptr;
+// --- Sorting/reorder buffers ---
+static uint32_t* dev_matKeys = nullptr;                 // 32-bit material keys
+static int* dev_indices = nullptr;                      // permutation
+static PathSegment* dev_paths_alt = nullptr;            // reorder dest (ping-pong)
+static ShadeableIntersection* dev_intersections_alt = nullptr;
 
 
 void InitDataContainer(GuiDataContainer* imGuiData)
@@ -130,10 +155,10 @@ void pathtraceInit(Scene* scene)
 
     // TODO: initialize any extra device memeory you need
     // For sort
-    cudaMalloc(&dev_matKeys, pixelcount * sizeof(int));
+    cudaMalloc(&dev_matKeys, pixelcount * sizeof(uint32_t));
     cudaMalloc(&dev_indices, pixelcount * sizeof(int));
-    cudaMalloc(&dev_paths_tmp, pixelcount * sizeof(PathSegment));
-    cudaMalloc(&dev_intersections_tmp, pixelcount * sizeof(ShadeableIntersection));
+    cudaMalloc(&dev_paths_alt, pixelcount * sizeof(PathSegment));
+    cudaMalloc(&dev_intersections_alt, pixelcount * sizeof(ShadeableIntersection));
 
     checkCUDAError("pathtraceInit");
 }
@@ -148,8 +173,8 @@ void pathtraceFree()
     // TODO: clean up any extra device memory you created
     cudaFree(dev_matKeys);
     cudaFree(dev_indices);
-    cudaFree(dev_paths_tmp);
-    cudaFree(dev_intersections_tmp);
+    cudaFree(dev_paths_alt);
+    cudaFree(dev_intersections_alt);
 
     checkCUDAError("pathtraceFree");
 }
@@ -174,12 +199,23 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
         segment.ray.origin = cam.position;
         segment.color = glm::vec3(1.0f, 1.0f, 1.0f);
 
+        // 4x4 stratified jitter per iteration
+        const int S = 4;
+        unsigned s = (iter - 1) % (S * S);
+        int sx = s % S, sy = s / S;
+
+        thrust::default_random_engine rng = makeSeededRandomEngine(iter, index, 0);
+        thrust::uniform_real_distribution<float> u01(0, 1);
+        float jx = (sx + u01(rng)) / S - 0.5f;
+        float jy = (sy + u01(rng)) / S - 0.5f;
+
         segment.ray.direction = glm::normalize(
             cam.view
             - cam.right * cam.pixelLength.x * ((x + jx) - cam.resolution.x * 0.5f)
             - cam.up * cam.pixelLength.y * ((y + jy) - cam.resolution.y * 0.5f));
 
-        segment.pixelIndex = index;s
+
+        segment.pixelIndex = index;
         segment.remainingBounces = traceDepth;
     }
 }
@@ -188,7 +224,7 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
 // computeIntersections handles generating ray intersections ONLY.
 // Generating new rays is handled in your shader(s).
 // Feel free to modify the code below.
-__global__ void computeIntersections(
+__global__ void computeIntersectionsUnopt(
     int depth,
     int num_paths,
     PathSegment* pathSegments,
@@ -253,6 +289,49 @@ __global__ void computeIntersections(
     }
 }
 
+// Slightly optimized intersection kernel
+__global__ void computeIntersections(
+    int depth,
+    int num_paths,
+    const PathSegment* __restrict__ pathSegments,
+    const Geom* __restrict__ geoms,
+    int geoms_size,
+    ShadeableIntersection* __restrict__ intersections)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_paths) return;
+
+    const Ray ray = pathSegments[idx].ray;
+
+    float t_min = 1e20f;
+    int   hit_i = -1;
+    glm::vec3 n_best = glm::vec3(0.0f);
+
+    glm::vec3 I_tmp, N_tmp;
+    bool outside;
+
+	#pragma unroll 1
+    for (int i = 0; i < geoms_size; ++i)
+    {
+        const Geom& g = geoms[i];
+        float t = -1.0f;
+        if (g.type == CUBE)        t = boxIntersectionTest(g, ray, I_tmp, N_tmp, outside);
+        else if (g.type == SPHERE) t = sphereIntersectionTest(g, ray, I_tmp, N_tmp, outside);
+
+        if (t > 0.0f && t < t_min) { t_min = t; hit_i = i; n_best = N_tmp; }
+    }
+
+    ShadeableIntersection out;
+    out.t = (hit_i < 0) ? -1.0f : t_min;
+    if (hit_i >= 0) {
+        out.materialId = geoms[hit_i].materialid;
+        out.surfaceNormal = n_best;
+    }
+    intersections[idx] = out;
+}
+
+
+
 // LOOK: "fake" shader demonstrating what you might do with the info in
 // a ShadeableIntersection, as well as how to use thrust's random number
 // generator. Observe that since the thrust random number generator basically
@@ -307,14 +386,15 @@ __global__ void shadeFakeMaterial(
     }
 }
 
-__global__ void buildMaterialKeys(
-    int n, const ShadeableIntersection* isects, int* keys, int sentinel)
+__global__ void buildMaterialKeys(int n,
+    const ShadeableIntersection* __restrict__ isects,
+    uint32_t* __restrict__ keys)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
-    float t = isects[i].t;
-    keys[i] = (t > 0.0f) ? isects[i].materialId : sentinel;
+    keys[i] = static_cast<uint32_t>(isects[i].materialId);
 }
+
 
 
 __global__ void gatherTerminated(int n, glm::vec3* image, PathSegment* paths)
@@ -344,35 +424,23 @@ __global__ void shadeMaterials(
     ShadeableIntersection isect = isects[idx];
     PathSegment& ps = paths[idx];
 
-    // If this path is already dead, nothing to do
-    if (ps.remainingBounces <= 0) {
-        ps.color = glm::vec3(0.0f);
-        return;
-    }
-
-    // Miss: background = black (no environment)
-    if (isect.t < 0.0f) {
-        ps.color = glm::vec3(0.0f);
-        ps.remainingBounces = 0;
-        return;
-    }
+    if (ps.remainingBounces <= 0) { ps.color = glm::vec3(0); return; }
+    if (isect.t < 0.0f) { ps.color = glm::vec3(0); ps.remainingBounces = 0; return; }
 
     const Material& m = materials[isect.materialId];
 
-    // Emissive: accumulate emission and terminate
     if (m.emittance > 0.0f) {
         ps.color *= (m.color * m.emittance);
         ps.remainingBounces = 0;
         return;
     }
 
-    // Diffuse bounce: sample cosine-weighted hemisphere and continue
-    thrust::default_random_engine rng =
-        makeSeededRandomEngine(iter, idx, ps.remainingBounces);
-
-    glm::vec3 hitP = ps.ray.origin + ps.ray.direction * isect.t;
+    thrust::default_random_engine rng = makeSeededRandomEngine(iter, idx, ps.remainingBounces);
+    const glm::vec3 hitP = ps.ray.origin + ps.ray.direction * isect.t;
     scatterRay(ps, hitP, isect.surfaceNormal, m, rng);
 }
+
+
 
 
 // Add the current iteration's output to the overall image
@@ -440,9 +508,11 @@ void pathtrace(uchar4* pbo, int frame, int iter)
     generateRayFromCamera<<<blocksPerGrid2d, blockSize2d>>>(cam, iter, traceDepth, dev_paths);
     checkCUDAError("generate camera ray");
 
-    int depth = 0;
+    /*int depth = 0;
     PathSegment* dev_path_end = dev_paths + pixelcount;
-    int num_paths = dev_path_end - dev_paths;
+    int num_paths = dev_path_end - dev_paths;*/
+    int depth = 0;
+    int num_paths = cam.resolution.x * cam.resolution.y;
 
     // --- PathSegment Tracing Stage ---
     // Shoot ray into scene, bounce between objects, push shading chunks
@@ -465,41 +535,52 @@ void pathtrace(uchar4* pbo, int frame, int iter)
         );
         checkCUDAError("trace one bounce");
         cudaDeviceSynchronize();
+
+        // Kill misses and compact (keep paths+isects aligned)
+        {
+            auto zip_begin = thrust::make_zip_iterator(thrust::make_tuple(dev_paths, dev_intersections));
+            auto zip_end = zip_begin + num_paths;
+
+            thrust::for_each(thrust::device, zip_begin, zip_end, MarkMissDead{});
+            auto zip_new_end = thrust::remove_if(thrust::device, zip_begin, zip_end, IsDeadTuple{});
+            num_paths = static_cast<int>(zip_new_end - zip_begin);
+        }
+
         depth++;
 
+        if (num_paths == 0) {
+            iterationComplete = true;
+            if (guiData) guiData->TracedDepth = depth;
+            break;
+        }
 
-        // Build keys: material id or sentinel for misses
-        buildMaterialKeys << <numblocksPathSegmentTracing, blockSize1d >> > (
-            num_paths, dev_intersections, dev_matKeys, INT_MAX);
 
         // Optionally sort-by-material
         bool doSort = !guiData ? true : guiData->SortByMaterial;
+
         if (doSort) {
-            // indices = [0..num_paths)
+            // build keys
+            buildMaterialKeys << <numblocksPathSegmentTracing, blockSize1d >> > (
+                num_paths, dev_intersections, dev_matKeys);
+
             thrust::sequence(thrust::device, dev_indices, dev_indices + num_paths);
 
-            // Sort keys, carrying indices
-            thrust::sort_by_key(
-                thrust::device,
+            // sort keys + permutation
+            thrust::sort_by_key(thrust::device,
                 dev_matKeys, dev_matKeys + num_paths,
                 dev_indices);
 
-            // Reorder both arrays using the permutation in indices
-            thrust::gather(
-                thrust::device,
+            // reorder (gather) into alt buffers, then swap pointers
+            thrust::gather(thrust::device,
                 dev_indices, dev_indices + num_paths,
-                dev_paths,                
-                dev_paths_tmp);          
+                dev_paths, dev_paths_alt);
 
-            thrust::gather(
-                thrust::device,
+            thrust::gather(thrust::device,
                 dev_indices, dev_indices + num_paths,
-                dev_intersections,       
-                dev_intersections_tmp); 
+                dev_intersections, dev_intersections_alt);
 
-            // Swap pointers
-            PathSegment* tmpP = dev_paths; dev_paths = dev_paths_tmp; dev_paths_tmp = tmpP;
-            ShadeableIntersection* tmpI = dev_intersections; dev_intersections = dev_intersections_tmp; dev_intersections_tmp = tmpI;
+            std::swap(dev_paths, dev_paths_alt);
+            std::swap(dev_intersections, dev_intersections_alt);
         }
         // TODO:
         // --- Shading Stage ---
@@ -510,15 +591,15 @@ void pathtrace(uchar4* pbo, int frame, int iter)
         // TODO: compare between directly shading the path segments and shading
         // path segments that have been reshuffled to be contiguous in memory.
 
-        shadeMaterials<<<numblocksPathSegmentTracing, blockSize1d>>>(
-            iter,
-            num_paths,
-            dev_intersections,
-            dev_paths,
-            dev_materials
-        );
+        shadeMaterials << <numblocksPathSegmentTracing, blockSize1d >> > (
+            iter, num_paths, dev_intersections, dev_paths, dev_materials);
+
+
+        // Accumulate finished paths for this bounce
         gatherTerminated << <numblocksPathSegmentTracing, blockSize1d >> > (
             num_paths, dev_image, dev_paths);
+
+		// Stream compact away terminated paths
         auto newEnd = thrust::remove_if(
             thrust::device, dev_paths, dev_paths + num_paths, IsDeadPath{});
 
