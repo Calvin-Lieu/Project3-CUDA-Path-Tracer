@@ -280,6 +280,51 @@ __global__ void shadeFakeMaterial(
     }
 }
 
+// BSDF shading: handles miss, emissive, and diffuse via scatterRay
+__global__ void shadeMaterials(
+    int iter,
+    int num_paths,
+    ShadeableIntersection* isects,
+    PathSegment* paths,
+    Material* materials)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_paths) return;
+
+    ShadeableIntersection isect = isects[idx];
+    PathSegment& ps = paths[idx];
+
+    // If this path is already dead, nothing to do
+    if (ps.remainingBounces <= 0) {
+        ps.color = glm::vec3(0.0f);
+        return;
+    }
+
+    // Miss: background = black (no environment)
+    if (isect.t < 0.0f) {
+        ps.color = glm::vec3(0.0f);
+        ps.remainingBounces = 0;
+        return;
+    }
+
+    const Material& m = materials[isect.materialId];
+
+    // Emissive: accumulate emission and terminate
+    if (m.emittance > 0.0f) {
+        ps.color *= (m.color * m.emittance);
+        ps.remainingBounces = 0;
+        return;
+    }
+
+    // Diffuse bounce: sample cosine-weighted hemisphere and continue
+    thrust::default_random_engine rng =
+        makeSeededRandomEngine(iter, idx, ps.remainingBounces);
+
+    glm::vec3 hitP = ps.ray.origin + ps.ray.direction * isect.t;
+    scatterRay(ps, hitP, isect.surfaceNormal, m, rng);
+}
+
+
 // Add the current iteration's output to the overall image
 __global__ void finalGather(int nPaths, glm::vec3* image, PathSegment* iterationPaths)
 {
@@ -381,14 +426,14 @@ void pathtrace(uchar4* pbo, int frame, int iter)
         // TODO: compare between directly shading the path segments and shading
         // path segments that have been reshuffled to be contiguous in memory.
 
-        shadeFakeMaterial<<<numblocksPathSegmentTracing, blockSize1d>>>(
+        shadeMaterials<<<numblocksPathSegmentTracing, blockSize1d>>>(
             iter,
             num_paths,
             dev_intersections,
             dev_paths,
             dev_materials
         );
-        iterationComplete = true; // TODO: should be based off stream compaction results.
+        iterationComplete = (depth >= traceDepth); // TODO: should be based off stream compaction results.
 
         if (guiData != NULL)
         {
