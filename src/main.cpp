@@ -286,6 +286,8 @@ void RenderImGui()
     //ImGui::Text("counter = %d", counter);
     ImGui::Text("Traced Depth %d", imguiData->TracedDepth);
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+    ImGui::Checkbox("Sort by material", &imguiData->SortByMaterial);
+
     ImGui::End();
 
 
@@ -355,6 +357,8 @@ int main(int argc, char** argv)
 
     //Create Instance for ImGUIData
     guiData = new GuiDataContainer();
+    guiData->SortByMaterial = true;
+
 
     // Set up camera stuff from loaded path tracer settings
     iteration = 0;
