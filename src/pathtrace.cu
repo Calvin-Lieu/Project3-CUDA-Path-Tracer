@@ -14,6 +14,9 @@
 #include <thrust/for_each.h>
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/tuple.h>
+#include <thrust/device_ptr.h>
+#include <thrust/binary_search.h>
+
 
 
 
@@ -121,10 +124,12 @@ static ShadeableIntersection* dev_intersections = NULL;
 // TODO: static variables for device memory, any extra info you need, etc
 // ...
 // --- Sorting/reorder buffers ---
-static uint32_t* dev_matKeys = nullptr;                 // 32-bit material keys
+static uint32_t* dev_matKeys = nullptr;                 // material id per active path
+static int* dev_typeKeys = nullptr;                     // shading class per active path
 static int* dev_indices = nullptr;                      // permutation
-static PathSegment* dev_paths_alt = nullptr;            // reorder dest (ping-pong)
+static PathSegment* dev_paths_alt = nullptr;            // ping-pong buffer
 static ShadeableIntersection* dev_intersections_alt = nullptr;
+static int* dev_typeKeys_alt = nullptr;                 // ping-pong for class keys
 
 
 void InitDataContainer(GuiDataContainer* imGuiData)
@@ -156,9 +161,11 @@ void pathtraceInit(Scene* scene)
     // TODO: initialize any extra device memeory you need
     // For sort
     cudaMalloc(&dev_matKeys, pixelcount * sizeof(uint32_t));
+    cudaMalloc(&dev_typeKeys, pixelcount * sizeof(int));
     cudaMalloc(&dev_indices, pixelcount * sizeof(int));
     cudaMalloc(&dev_paths_alt, pixelcount * sizeof(PathSegment));
     cudaMalloc(&dev_intersections_alt, pixelcount * sizeof(ShadeableIntersection));
+    cudaMalloc(&dev_typeKeys_alt, pixelcount * sizeof(int));
 
     checkCUDAError("pathtraceInit");
 }
@@ -172,9 +179,11 @@ void pathtraceFree()
     cudaFree(dev_intersections);
     // TODO: clean up any extra device memory you created
     cudaFree(dev_matKeys);
+    cudaFree(dev_typeKeys);
     cudaFree(dev_indices);
     cudaFree(dev_paths_alt);
     cudaFree(dev_intersections_alt);
+    cudaFree(dev_typeKeys_alt);
 
     checkCUDAError("pathtraceFree");
 }
@@ -288,7 +297,7 @@ __global__ void computeIntersectionsUnopt(
         }
     }
 }
-
+   
 // Slightly optimized intersection kernel
 __global__ void computeIntersections(
     int depth,
@@ -395,7 +404,53 @@ __global__ void buildMaterialKeys(int n,
     keys[i] = static_cast<uint32_t>(isects[i].materialId);
 }
 
+enum ShadingClass : int { SHADING_EMISSIVE = 0, SHADING_DIFFUSE = 1 };
 
+__global__ void buildTypeKeys(
+    int n,
+    const ShadeableIntersection* __restrict__ isects,
+    const Material* __restrict__ materials,
+    int* __restrict__ typeKeys)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    const Material& m = materials[isects[i].materialId];
+    typeKeys[i] = (m.emittance > 0.0f) ? SHADING_EMISSIVE : SHADING_DIFFUSE;
+}
+
+// Per-class shading over contiguous spans (branch-free)
+__global__ void shadeEmissiveRange(int n,
+    const ShadeableIntersection* __restrict__ isects,
+    const Material* __restrict__ materials,
+    PathSegment* paths)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    const Material& m = materials[isects[i].materialId];
+    //if (m.emittance > 0.0f) {
+    paths[i].color *= (m.color * m.emittance);
+    paths[i].remainingBounces = 0;
+    //}
+
+}
+
+__global__ void shadeDiffuseRange(
+    int iter, int n,
+    const ShadeableIntersection* __restrict__ isects,
+    const Material* __restrict__ materials,
+    PathSegment* paths)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+
+    ShadeableIntersection isect = isects[i];
+    PathSegment& ps = paths[i];
+    if (ps.remainingBounces <= 0) return;
+
+    thrust::default_random_engine rng = makeSeededRandomEngine(iter, i, ps.remainingBounces);
+    const glm::vec3 P = ps.ray.origin + ps.ray.direction * isect.t;
+    scatterRay(ps, P, isect.surfaceNormal, materials[isect.materialId], rng);
+}
 
 __global__ void gatherTerminated(int n, glm::vec3* image, PathSegment* paths)
 {
@@ -557,43 +612,82 @@ void pathtrace(uchar4* pbo, int frame, int iter)
 
         // Optionally sort-by-material
         bool doSort = !guiData ? true : guiData->SortByMaterial;
-
         if (doSort) {
-            // build keys
+            // Build material keys from current intersections
             buildMaterialKeys << <numblocksPathSegmentTracing, blockSize1d >> > (
                 num_paths, dev_intersections, dev_matKeys);
-
             thrust::sequence(thrust::device, dev_indices, dev_indices + num_paths);
 
-            // sort keys + permutation
+            // Sort by material ID
             thrust::sort_by_key(thrust::device,
                 dev_matKeys, dev_matKeys + num_paths,
                 dev_indices);
 
-            // reorder (gather) into alt buffers, then swap pointers
-            thrust::gather(thrust::device,
-                dev_indices, dev_indices + num_paths,
+            // Reorder paths and intersections using the permutation
+            thrust::gather(thrust::device, dev_indices, dev_indices + num_paths,
                 dev_paths, dev_paths_alt);
-
-            thrust::gather(thrust::device,
-                dev_indices, dev_indices + num_paths,
+            thrust::gather(thrust::device, dev_indices, dev_indices + num_paths,
                 dev_intersections, dev_intersections_alt);
 
             std::swap(dev_paths, dev_paths_alt);
             std::swap(dev_intersections, dev_intersections_alt);
+
+            // Build typeKeys from the REORDERED intersections
+            buildTypeKeys << <numblocksPathSegmentTracing, blockSize1d >> > (
+                num_paths, dev_intersections, dev_materials, dev_typeKeys);
+            checkCUDAError("build type keys");
+
+            // Create indices for secondary sort
+            thrust::sequence(thrust::device, dev_indices, dev_indices + num_paths);
+
+            // Stable sort by type to separate emissive from diffuse
+            thrust::stable_sort_by_key(thrust::device,
+                dev_typeKeys, dev_typeKeys + num_paths,
+                dev_indices);
+
+            // Reorder everything by type
+            thrust::gather(thrust::device, dev_indices, dev_indices + num_paths,
+                dev_paths, dev_paths_alt);
+            thrust::gather(thrust::device, dev_indices, dev_indices + num_paths,
+                dev_intersections, dev_intersections_alt);
+            thrust::gather(thrust::device, dev_indices, dev_indices + num_paths,
+                dev_typeKeys, dev_typeKeys_alt);
+
+            std::swap(dev_paths, dev_paths_alt);
+            std::swap(dev_intersections, dev_intersections_alt);
+            std::swap(dev_typeKeys, dev_typeKeys_alt);
+
+            checkCUDAError("reorder by type");
+
+            // Find boundary between emissive and diffuse
+            thrust::device_ptr<int> kb(dev_typeKeys);
+            const int nEmissive = (int)(thrust::upper_bound(thrust::device, kb, kb + num_paths, SHADING_EMISSIVE) - kb);
+            const int nDiffuse = num_paths - nEmissive;
+
+            auto blocks = [&](int n) { return (n + blockSize1d - 1) / blockSize1d; };
+
+            // Shade emissive materials
+            if (nEmissive > 0) {
+                shadeEmissiveRange << <blocks(nEmissive), blockSize1d >> > (
+                    nEmissive, dev_intersections, dev_materials, dev_paths);
+                checkCUDAError("emissive shading");
+            }
+
+            // Shade diffuse materials  
+            if (nDiffuse > 0) {
+                shadeDiffuseRange << <blocks(nDiffuse), blockSize1d >> > (
+                    iter, nDiffuse,
+                    dev_intersections + nEmissive,
+                    dev_materials,
+                    dev_paths + nEmissive);
+                checkCUDAError("diffuse shading");
+            }
         }
-        // TODO:
-        // --- Shading Stage ---
-        // Shade path segments based on intersections and generate new rays by
-        // evaluating the BSDF.
-        // Start off with just a big kernel that handles all the different
-        // materials you have in the scenefile.
-        // TODO: compare between directly shading the path segments and shading
-        // path segments that have been reshuffled to be contiguous in memory.
-
-        shadeMaterials << <numblocksPathSegmentTracing, blockSize1d >> > (
-            iter, num_paths, dev_intersections, dev_paths, dev_materials);
-
+        else {
+            shadeMaterials << <numblocksPathSegmentTracing, blockSize1d >> > (
+                iter, num_paths, dev_intersections, dev_paths, dev_materials);
+            checkCUDAError("mega shading");
+        }
 
         // Accumulate finished paths for this bounce
         gatherTerminated << <numblocksPathSegmentTracing, blockSize1d >> > (
