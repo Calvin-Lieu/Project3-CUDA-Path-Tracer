@@ -104,21 +104,21 @@
             "MATERIAL": "light_warm",
             "TRANS": [ -8.0, 11.8, -10.0 ],
             "ROTAT": [ 0, 0, 0 ],
-            "SCALE": [ 4.0, 0.10, 4.0 ]
+            "SCALE": [ 0.3, 0.01, 0.3 ]
         },
         {
             "TYPE": "cube",
             "MATERIAL": "light_cool",
             "TRANS": [ 0.0, 11.8, 0.0 ],
             "ROTAT": [ 0, 0, 0 ],
-            "SCALE": [ 5.0, 0.10, 5.0 ]
+            "SCALE": [ 0.3, 0.01, 0.3 ]
         },
         {
             "TYPE": "cube",
             "MATERIAL": "light_warm",
             "TRANS": [ 8.0, 11.8, 10.0 ],
             "ROTAT": [ 0, 0, 0 ],
-            "SCALE": [ 4.0, 0.10, 4.0 ]
+            "SCALE": [ 0.3, 0.01, 0.3 ]
         },
 
 

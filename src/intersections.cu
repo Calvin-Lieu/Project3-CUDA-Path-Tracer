@@ -111,3 +111,17 @@ __host__ __device__ float sphereIntersectionTest(
 
     return glm::length(r.origin - intersectionPoint);
 }
+
+__device__ bool intersectAABB(const Ray& ray, const glm::vec3& aabbMin, const glm::vec3& aabbMax) {
+    glm::vec3 invDir = 1.0f / ray.direction;
+    glm::vec3 t0 = (aabbMin - ray.origin) * invDir;
+    glm::vec3 t1 = (aabbMax - ray.origin) * invDir;
+
+    glm::vec3 tmin = glm::min(t0, t1);
+    glm::vec3 tmax = glm::max(t0, t1);
+
+    float tNear = glm::max(glm::max(tmin.x, tmin.y), tmin.z);
+    float tFar = glm::min(glm::min(tmax.x, tmax.y), tmax.z);
+
+    return tNear <= tFar && tFar > 0.0f;
+}

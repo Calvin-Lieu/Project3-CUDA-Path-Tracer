@@ -57,6 +57,10 @@ set(headers
     src/scene.h
     src/sceneStructs.h
     src/utilities.h
+    src/pathHelpers.h
+    src/sortKeys.h
+    src/directLighting.h
+    src/bvh.h
 )
 
 set(sources
@@ -69,6 +73,10 @@ set(sources
     src/interactions.cu
     src/scene.cpp
     src/utilities.cpp
+    src/pathHelpers.cu
+    src/sortKeys.cu
+    src/directLighting.cu
+    src/bvh.cu
 )
 
 set(imgui_headers

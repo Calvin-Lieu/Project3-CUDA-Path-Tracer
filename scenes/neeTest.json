@@ -1,0 +1,122 @@
+{
+    "Materials": {
+        "tiny_light": {
+            "TYPE": "Emitting",
+            "RGB": [ 1.0, 1.0, 1.0 ],
+            "EMITTANCE": 200.0
+        },
+        "diffuse_white": {
+            "TYPE": "Diffuse",
+            "RGB": [ 0.8, 0.8, 0.8 ]
+        },
+        "diffuse_red": {
+            "TYPE": "Diffuse",
+            "RGB": [ 0.8, 0.2, 0.2 ]
+        },
+        "diffuse_green": {
+            "TYPE": "Diffuse",
+            "RGB": [ 0.2, 0.8, 0.2 ]
+        }
+    },
+
+    "Camera": {
+        "RES": [ 800, 800 ],
+        "FOVY": 45.0,
+        "ITERATIONS": 5000,
+        "DEPTH": 8,
+        "FILE": "nee_test",
+        "EYE": [ 0.0, 5.0, 15.0 ],
+        "LOOKAT": [ 0.0, 5.0, 0.0 ],
+        "UP": [ 0.0, 1.0, 0.0 ]
+    },
+
+    "Objects": [
+        {
+            "TYPE": "cube",
+            "MATERIAL": "diffuse_white",
+            "TRANS": [ 0.0, 0.0, 0.0 ],
+            "ROTAT": [ 0, 0, 0 ],
+            "SCALE": [ 20.0, 0.1, 20.0 ]
+        },
+        {
+            "TYPE": "cube",
+            "MATERIAL": "diffuse_white",
+            "TRANS": [ 0.0, 10.0, 0.0 ],
+            "ROTAT": [ 0, 0, 0 ],
+            "SCALE": [ 20.0, 0.1, 20.0 ]
+        },
+        {
+            "TYPE": "cube",
+            "MATERIAL": "diffuse_red",
+            "TRANS": [ -10.0, 5.0, 0.0 ],
+            "ROTAT": [ 0, 0, 0 ],
+            "SCALE": [ 0.1, 10.0, 20.0 ]
+        },
+        {
+            "TYPE": "cube",
+            "MATERIAL": "diffuse_green",
+            "TRANS": [ 10.0, 5.0, 0.0 ],
+            "ROTAT": [ 0, 0, 0 ],
+            "SCALE": [ 0.1, 10.0, 20.0 ]
+        },
+        {
+            "TYPE": "cube",
+            "MATERIAL": "diffuse_white",
+            "TRANS": [ 0.0, 5.0, -10.0 ],
+            "ROTAT": [ 0, 0, 0 ],
+            "SCALE": [ 20.0, 10.0, 0.1 ]
+        },
+
+        {
+            "TYPE": "sphere",
+            "MATERIAL": "tiny_light",
+            "TRANS": [ 0.0, 8.0, -5.0 ],
+            "ROTAT": [ 0, 0, 0 ],
+            "SCALE": [ 0.15, 0.15, 0.15 ]
+        },
+
+        {
+            "TYPE": "cube",
+            "MATERIAL": "diffuse_white",
+            "TRANS": [ 0.0, 2.5, 0.0 ],
+            "ROTAT": [ 0, 0, 0 ],
+            "SCALE": [ 8.0, 5.0, 0.3 ]
+        },
+        {
+            "TYPE": "cube",
+            "MATERIAL": "diffuse_white",
+            "TRANS": [ 0.0, 2.5, 3.0 ],
+            "ROTAT": [ 0, 0, 0 ],
+            "SCALE": [ 8.0, 5.0, 0.3 ]
+        },
+        {
+            "TYPE": "cube",
+            "MATERIAL": "diffuse_white",
+            "TRANS": [ -3.5, 2.5, 1.5 ],
+            "ROTAT": [ 0, 0, 0 ],
+            "SCALE": [ 0.3, 5.0, 3.0 ]
+        },
+        {
+            "TYPE": "cube",
+            "MATERIAL": "diffuse_white",
+            "TRANS": [ 3.5, 2.5, 1.5 ],
+            "ROTAT": [ 0, 0, 0 ],
+            "SCALE": [ 0.3, 5.0, 3.0 ]
+        },
+
+        {
+            "TYPE": "sphere",
+            "MATERIAL": "diffuse_white",
+            "TRANS": [ -2.0, 1.0, 5.0 ],
+            "ROTAT": [ 0, 0, 0 ],
+            "SCALE": [ 1.0, 1.0, 1.0 ]
+        },
+        {
+            "TYPE": "sphere",
+            "MATERIAL": "diffuse_white",
+            "TRANS": [ 2.0, 1.0, 5.0 ],
+            "ROTAT": [ 0, 0, 0 ],
+            "SCALE": [ 1.0, 1.0, 1.0 ]
+        }
+    ]
+}

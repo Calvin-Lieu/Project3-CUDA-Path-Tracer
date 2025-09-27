@@ -287,6 +287,9 @@ void RenderImGui()
     ImGui::Text("Traced Depth %d", imguiData->TracedDepth);
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
     ImGui::Checkbox("Sort by material", &imguiData->SortByMaterial);
+    ImGui::Checkbox("Enable RR", &guiData->UseRussianRoulette);
+    ImGui::Checkbox("Direct Lighting (NEE)", &guiData->UseDirectLighting);
+    ImGui::Checkbox("Use BVH Acceleration", &guiData->UseBVH);
 
     ImGui::End();
 

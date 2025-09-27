@@ -21,6 +21,9 @@ public:
     GuiDataContainer() : TracedDepth(0) {}
     int TracedDepth;
     bool SortByMaterial;
+    bool UseRussianRoulette = true;
+    bool UseDirectLighting = true;
+    bool UseBVH = true;
 };
 
 namespace utilityCore

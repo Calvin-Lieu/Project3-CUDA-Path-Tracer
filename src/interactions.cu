@@ -3,6 +3,7 @@
 #include "utilities.h"
 
 #include <thrust/random.h>
+#include <math_constants.h>
 
 __host__ __device__ glm::vec3 calculateRandomDirectionInHemisphere(
     glm::vec3 normal,
@@ -44,20 +45,29 @@ __host__ __device__ glm::vec3 calculateRandomDirectionInHemisphere(
         + sin(around) * over * perpendicularDirection2;
 }
 
-__host__ __device__ void scatterRay(
-    PathSegment & pathSegment,
+__device__ void scatterRay(
+    PathSegment& pathSegment,
     glm::vec3 intersect,
     glm::vec3 normal,
-    const Material &m,
-    thrust::default_random_engine &rng)
+    const Material& m,
+    thrust::default_random_engine& rng)
 {
-    // TODO: implement this.
-    // A basic implementation of pure-diffuse shading will just call the
-    // calculateRandomDirectionInHemisphere defined above.
-    glm::vec3 wi = calculateRandomDirectionInHemisphere(normal, rng);
-    pathSegment.ray.origin = intersect + normal * 1e-4f; // avoid acne
-    pathSegment.ray.direction = wi;                         // already unit & same hemisphere
-    pathSegment.color *= m.color;                    // Lambertian throughput
-    pathSegment.remainingBounces--;
+    // Sample new direction (cosine-weighted hemisphere)
+    glm::vec3 newDir = calculateRandomDirectionInHemisphere(normal, rng);
 
+    // Update ray
+    pathSegment.ray.origin = intersect + 0.001f * normal;
+    pathSegment.ray.direction = newDir;
+
+    // Compute PDF and cosine term
+    float cosTheta = glm::dot(newDir, normal);
+    float pdf = fmaxf(cosTheta / CUDART_PI_F, 0.f);
+
+    // Store PDF for next MIS calculation
+    pathSegment.prevBsdfPdf = pdf;
+
+    pathSegment.color *= m.color;
+
+    // Decrement bounces
+    pathSegment.remainingBounces--;
 }
