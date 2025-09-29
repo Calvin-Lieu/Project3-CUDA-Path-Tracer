@@ -189,7 +189,7 @@ void pathtraceInit(Scene* scene)
     //}
 
     // Build BVH
-    dev_bvh = BVHBuilder::build(scene->geoms);
+    dev_bvh = BVHBuilder::build(scene->geoms, scene->meshes);
     bvhBuilt = true;
 
     checkCUDAError("pathtraceInit");
@@ -324,7 +324,7 @@ __global__ void computeIntersectionsBVH(
     const PathSegment* __restrict__ pathSegments,
     const Geom* __restrict__ geoms,
     const BVHNode* __restrict__ bvhNodes,
-    const int* __restrict__ primIndices,
+    const BVHPrimitive* __restrict__ primitives,
     const TriangleMeshData* __restrict__ meshes,
     ShadeableIntersection* __restrict__ intersections)
 {
@@ -337,7 +337,10 @@ __global__ void computeIntersectionsBVH(
     int hit_i = -1;
     glm::vec3 n_best = glm::vec3(0.0f);
 
-    // Stack for iterative traversal
+    glm::vec3 I_tmp, N_tmp;
+    bool outside;
+
+    // Stack for iterative BVH traversal
     int stack[64];
     int stackPtr = 0;
     stack[stackPtr++] = 0; // Start with root
@@ -346,39 +349,44 @@ __global__ void computeIntersectionsBVH(
         int nodeIdx = stack[--stackPtr];
         const BVHNode& node = bvhNodes[nodeIdx];
 
+        // Test AABB
         if (!intersectAABB(ray, node.aabbMin, node.aabbMax))
             continue;
 
         if (node.leftChild == -1) {
             // Leaf node - test primitives
             for (int i = 0; i < node.primCount; i++) {
-                int geomIdx = primIndices[node.primStart + i];
-                const Geom& g = geoms[geomIdx];
+                const BVHPrimitive& prim = primitives[node.primStart + i];
+                const Geom& g = geoms[prim.geomIndex];
 
-                glm::vec3 I_tmp, N_tmp;
-                bool outside;
                 float t = -1.0f;
 
-                if (g.type == CUBE) {
-                    t = boxIntersectionTest(g, ray, I_tmp, N_tmp, outside);
+                if (prim.type == PRIM_GEOM) {
+                    // Test whole geometry (sphere or cube)
+                    if (g.type == CUBE) {
+                        t = boxIntersectionTest(g, ray, I_tmp, N_tmp, outside);
+                    }
+                    else if (g.type == SPHERE) {
+                        t = sphereIntersectionTest(g, ray, I_tmp, N_tmp, outside);
+                    }
                 }
-                else if (g.type == SPHERE) {
-                    t = sphereIntersectionTest(g, ray, I_tmp, N_tmp, outside);
-                }
-                else if (g.type == TRIANGLE_MESH && g.meshIndex >= 0) {
-                    t = meshIntersectionTest(g, meshes[g.meshIndex], ray, I_tmp, N_tmp, outside);
+                else {
+                    // Test single triangle
+                    t = singleTriangleIntersectionTest(g, meshes[g.meshIndex],
+                        prim.triangleIndex, ray,
+                        I_tmp, N_tmp, outside);
                 }
 
                 if (t > 0.0f && t < t_min) {
                     t_min = t;
-                    hit_i = geomIdx;
+                    hit_i = prim.geomIndex;
                     n_best = N_tmp;
                 }
             }
         }
         else {
             // Interior node - add children to stack
-            if (stackPtr < 63) {
+            if (stackPtr < 62) {  // Leave room for both children
                 stack[stackPtr++] = node.leftChild;
                 stack[stackPtr++] = node.rightChild;
             }
@@ -394,7 +402,6 @@ __global__ void computeIntersectionsBVH(
     }
     intersections[idx] = out;
 }
-
 
 // Per-class shading over contiguous spans
 __global__ void shadeEmissiveRange(
@@ -573,7 +580,7 @@ void pathtrace(uchar4* pbo, int frame, int iter)
         if (useBVH && bvhBuilt) {
             computeIntersectionsBVH << <numblocksPathSegmentTracing, blockSize1d >> > (
                 depth, num_paths, dev_paths, dev_geoms,
-                dev_bvh.nodes, dev_bvh.primIndices, dev_meshes, dev_intersections);
+                dev_bvh.nodes, dev_bvh.primitives, dev_meshes, dev_intersections);
         }
         else {
             computeIntersections << <numblocksPathSegmentTracing, blockSize1d >> > (
