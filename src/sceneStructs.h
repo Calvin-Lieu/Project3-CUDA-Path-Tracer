@@ -1,5 +1,6 @@
 #pragma once
 
+
 #include <cuda_runtime.h>
 
 #include "glm/glm.hpp"
@@ -12,7 +13,8 @@
 enum GeomType
 {
     SPHERE,
-    CUBE
+    CUBE,
+    TRIANGLE_MESH
 };
 
 struct Ray
@@ -31,6 +33,22 @@ struct Geom
     glm::mat4 transform;
     glm::mat4 inverseTransform;
     glm::mat4 invTranspose;
+
+    // For triangle meshes loaded from glTF
+    int meshIndex = -1;  // Index into tinygltf::Model::meshes
+};
+
+struct TriangleMeshData {
+    float* vertices;        // Device pointer: [x,y,z, x,y,z, ...]
+    float* normals;         // Device pointer: [nx,ny,nz, nx,ny,nz, ...]  
+    unsigned int* indices;  // Device pointer: [i0,i1,i2, i0,i1,i2, ...]
+    int triangleCount;      // Number of triangles (indices.size() / 3)
+};
+
+struct MeshData {
+    std::vector<float> vertices;
+    std::vector<float> normals;
+    std::vector<unsigned int> indices;
 };
 
 struct Material
@@ -45,6 +63,9 @@ struct Material
     float hasRefractive;
     float indexOfRefraction;
     float emittance;
+
+    float roughness;      // 0 = perfect smooth, 1 = very rough
+    float metallic;       // 0 = dielectric, 1 = metallic
 };
 
 struct Camera
@@ -75,6 +96,7 @@ struct PathSegment
     int pixelIndex;
     int remainingBounces;
     float prevBsdfPdf;
+    unsigned char prevWasDelta;
 };
 
 // Use with a corresponding PathSegment to do:

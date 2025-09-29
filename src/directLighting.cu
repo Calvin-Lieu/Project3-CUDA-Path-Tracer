@@ -159,9 +159,9 @@ __device__ void addDirectLighting_NEEDiffuse(
     const float w_l = (p_l * p_l) / (p_l * p_l + p_b * p_b);
 
     const glm::vec3 contrib = f * Le * cosS * (w_l / p_l);
-    /*if (pixelIndex == 320000 && contrib.x > 0.001f) {
+    if (pixelIndex == 320000 && contrib.x > 0.001f) {
         printf("NEE adding: (%f, %f, %f) to pixel %d\n", contrib.x, contrib.y, contrib.z, pixelIndex);
-    }*/
+    }
 
     atomicAddVec3(image, pixelIndex, contrib);
 }
@@ -192,10 +192,13 @@ __device__ glm::vec3 evalEmissiveWithMIS(
     int numLights)
 {
     // First bounce or no previous BSDF sample: no MIS
-    if (depth == 1 || path.prevBsdfPdf <= 0.0f) {
+    /*if (depth == 1 || path.prevBsdfPdf <= 0.0f) {
+        return path.color * Le;
+    }*/
+
+    if (depth == 1 || path.prevWasDelta) {
         return path.color * Le;
     }
-    
     const int hitGeomIdx = isect.geomId;
     
     // Find light in list

@@ -40,9 +40,25 @@ __host__ __device__ glm::vec3 calculateRandomDirectionInHemisphere(
  *
  * You may need to change the parameter list for your purposes!
  */
-__host__ __device__ void scatterRay(
+
+__device__ float fresnelDielectric(float cosThetaI, float etaI, float etaT);
+
+__device__ void scatterRay(
     PathSegment& pathSegment,
     glm::vec3 intersect,
     glm::vec3 normal,
     const Material& m,
     thrust::default_random_engine& rng);
+
+__host__ __device__ inline bool isDiffuse(const Material& m) {
+    return (m.hasReflective < 0.5f) && (m.hasRefractive < 0.5f);
+}
+__host__ __device__ inline bool isDielectric(const Material& m) {
+    return (m.hasRefractive > 0.5f);
+}
+__host__ __device__ inline bool isMirrorLike(const Material& m) {
+    return (m.hasReflective > 0.5f) && (m.roughness <= 0.0f);
+}
+
+
+

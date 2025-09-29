@@ -1,4 +1,6 @@
 #include "intersections.h"
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/intersect.hpp>
 
 __host__ __device__ float boxIntersectionTest(
     Geom box,
@@ -124,4 +126,82 @@ __device__ bool intersectAABB(const Ray& ray, const glm::vec3& aabbMin, const gl
     float tFar = glm::min(glm::min(tmax.x, tmax.y), tmax.z);
 
     return tNear <= tFar && tFar > 0.0f;
+}
+
+__device__ float meshIntersectionTest(
+    const Geom& geom,
+    const TriangleMeshData& mesh,
+    Ray r,
+    glm::vec3& intersectionPoint,
+    glm::vec3& normal,
+    bool& outside)
+{
+    // Ray to object space
+    const glm::vec3 ro = glm::vec3(geom.inverseTransform * glm::vec4(r.origin, 1.0f));
+    const glm::vec3 rd = glm::normalize(glm::vec3(geom.inverseTransform * glm::vec4(r.direction, 0.0f)));
+
+    const float EPS = 1e-7f;
+    float tClosest = 1e30f;
+    glm::vec3 bestNormal(0.0f);
+    bool hit = false;
+
+    for (int i = 0; i < mesh.triangleCount; ++i) {
+        const unsigned int i0 = mesh.indices[i * 3 + 0];
+        const unsigned int i1 = mesh.indices[i * 3 + 1];
+        const unsigned int i2 = mesh.indices[i * 3 + 2];
+
+        const glm::vec3 v0(mesh.vertices[i0 * 3 + 0], mesh.vertices[i0 * 3 + 1], mesh.vertices[i0 * 3 + 2]);
+        const glm::vec3 v1(mesh.vertices[i1 * 3 + 0], mesh.vertices[i1 * 3 + 1], mesh.vertices[i1 * 3 + 2]);
+        const glm::vec3 v2(mesh.vertices[i2 * 3 + 0], mesh.vertices[i2 * 3 + 1], mesh.vertices[i2 * 3 + 2]);
+
+        const glm::vec3 e1 = v1 - v0;
+        const glm::vec3 e2 = v2 - v0;
+
+        // Moller-Trumbore
+        const glm::vec3 pvec = glm::cross(rd, e2);
+        const float det = glm::dot(e1, pvec);
+        if (fabsf(det) < EPS) continue;
+        const float invDet = 1.0f / det;
+
+        const glm::vec3 tvec = ro - v0;
+        const float u = glm::dot(tvec, pvec) * invDet;
+        if (u < 0.0f || u > 1.0f) continue;
+
+        const glm::vec3 qvec = glm::cross(tvec, e1);
+        const float v = glm::dot(rd, qvec) * invDet;
+        if (v < 0.0f || (u + v) > 1.0f) continue;
+
+        const float t = glm::dot(e2, qvec) * invDet;
+        if (t <= EPS) continue;
+
+        if (t < tClosest) {
+            tClosest = t;
+            hit = true;
+
+            // Interpolate normals if available; otherwise face normal
+            if (mesh.normals) {
+                const glm::vec3 n0(mesh.normals[i0 * 3 + 0], mesh.normals[i0 * 3 + 1], mesh.normals[i0 * 3 + 2]);
+                const glm::vec3 n1(mesh.normals[i1 * 3 + 0], mesh.normals[i1 * 3 + 1], mesh.normals[i1 * 3 + 2]);
+                const glm::vec3 n2(mesh.normals[i2 * 3 + 0], mesh.normals[i2 * 3 + 1], mesh.normals[i2 * 3 + 2]);
+                const float w = 1.0f - u - v;
+                bestNormal = glm::normalize(w * n0 + u * n1 + v * n2);
+            } else {
+                bestNormal = glm::normalize(glm::cross(e1, e2));
+            }
+        }
+    }
+
+    if (!hit) return -1.0f;
+
+    // Object to world
+    const glm::vec3 Pobj = ro + rd * tClosest;
+    intersectionPoint = glm::vec3(geom.transform * glm::vec4(Pobj, 1.0f));
+    normal = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(bestNormal, 0.0f)));
+
+    // Orient and set outside
+    outside = glm::dot(r.direction, normal) < 0.0f;
+    if (!outside) normal = -normal;
+
+    // Return world-space distance like your sphere/box tests
+    return glm::length(intersectionPoint - r.origin);
 }

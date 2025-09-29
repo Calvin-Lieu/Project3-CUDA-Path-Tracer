@@ -89,11 +89,9 @@ static ShadeableIntersection* dev_intersections = NULL;
 
 // Sorting/reorder buffers
 static uint32_t* dev_matKeys = nullptr;
-static int* dev_typeKeys = nullptr;
 static int* dev_indices = nullptr;
 static PathSegment* dev_paths_alt = nullptr;
 static ShadeableIntersection* dev_intersections_alt = nullptr;
-static int* dev_typeKeys_alt = nullptr;
 
 static int* dev_lightGeomIdx = nullptr;
 static int hst_numLights = 0;
@@ -101,6 +99,8 @@ static int hst_numLights = 0;
 static BVH dev_bvh;
 static bool bvhBuilt = false;
 
+static TriangleMeshData* dev_meshes = nullptr;
+static int numMeshes = 0;
 
 void InitDataContainer(GuiDataContainer* imGuiData)
 {
@@ -130,11 +130,43 @@ void pathtraceInit(Scene* scene)
 
     // For sort
     cudaMalloc(&dev_matKeys, pixelcount * sizeof(uint32_t));
-    cudaMalloc(&dev_typeKeys, pixelcount * sizeof(int));
     cudaMalloc(&dev_indices, pixelcount * sizeof(int));
     cudaMalloc(&dev_paths_alt, pixelcount * sizeof(PathSegment));
     cudaMalloc(&dev_intersections_alt, pixelcount * sizeof(ShadeableIntersection));
-    cudaMalloc(&dev_typeKeys_alt, pixelcount * sizeof(int));
+
+    if (!scene->meshes.empty()) {
+        numMeshes = scene->meshes.size();
+        cudaMalloc(&dev_meshes, numMeshes * sizeof(TriangleMeshData));
+
+        std::vector<TriangleMeshData> hostMeshes(numMeshes);
+
+        for (int i = 0; i < numMeshes; ++i) {
+            const auto& hostMesh = scene->meshes[i];
+
+            // Allocate and copy vertex data
+            cudaMalloc(&hostMeshes[i].vertices, hostMesh.vertices.size() * sizeof(float));
+            cudaMemcpy(hostMeshes[i].vertices, hostMesh.vertices.data(),
+                hostMesh.vertices.size() * sizeof(float), cudaMemcpyHostToDevice);
+
+            // Allocate and copy normal data
+            cudaMalloc(&hostMeshes[i].normals, hostMesh.normals.size() * sizeof(float));
+            cudaMemcpy(hostMeshes[i].normals, hostMesh.normals.data(),
+                hostMesh.normals.size() * sizeof(float), cudaMemcpyHostToDevice);
+
+            // Allocate and copy index data
+            cudaMalloc(&hostMeshes[i].indices, hostMesh.indices.size() * sizeof(unsigned int));
+            cudaMemcpy(hostMeshes[i].indices, hostMesh.indices.data(),
+                hostMesh.indices.size() * sizeof(unsigned int), cudaMemcpyHostToDevice);
+            hostMeshes[i].triangleCount = hostMesh.indices.size() / 3;
+        }
+
+        cudaMemcpy(dev_meshes, hostMeshes.data(), numMeshes * sizeof(TriangleMeshData), cudaMemcpyHostToDevice);
+    }
+    else {
+        // No meshes to load
+        dev_meshes = nullptr;
+        numMeshes = 0;
+    }
 
     // Build emissive geoms list and copy to device
     
@@ -172,12 +204,26 @@ void pathtraceFree()
     cudaFree(dev_intersections);
 
     cudaFree(dev_matKeys);
-    cudaFree(dev_typeKeys);
     cudaFree(dev_indices);
     cudaFree(dev_paths_alt);
     cudaFree(dev_intersections_alt);
-    cudaFree(dev_typeKeys_alt);
     cudaFree(dev_lightGeomIdx);
+
+    if (dev_meshes) {
+        TriangleMeshData* hostMeshes = new TriangleMeshData[numMeshes];
+        cudaMemcpy(hostMeshes, dev_meshes, numMeshes * sizeof(TriangleMeshData), cudaMemcpyDeviceToHost);
+
+        for (int i = 0; i < numMeshes; ++i) {
+            if (hostMeshes[i].vertices) cudaFree(hostMeshes[i].vertices);
+            if (hostMeshes[i].normals) cudaFree(hostMeshes[i].normals);
+            if (hostMeshes[i].indices) cudaFree(hostMeshes[i].indices);
+        }
+
+        delete[] hostMeshes;
+        cudaFree(dev_meshes);
+        dev_meshes = nullptr;
+        numMeshes = 0;
+    }
 
     BVHBuilder::free(dev_bvh);
     checkCUDAError("pathtraceFree");
@@ -196,6 +242,7 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
         segment.ray.origin = cam.position;
         segment.color = glm::vec3(1.0f, 1.0f, 1.0f);
         segment.prevBsdfPdf = 0.0f;
+        segment.prevWasDelta = 0;
 
         // 4x4 stratified jitter per iteration
         const int S = 4;
@@ -224,6 +271,7 @@ __global__ void computeIntersections(
     const PathSegment* __restrict__ pathSegments,
     const Geom* __restrict__ geoms,
     int geoms_size,
+    const TriangleMeshData* __restrict__ meshes,
     ShadeableIntersection* __restrict__ intersections)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -238,15 +286,27 @@ __global__ void computeIntersections(
     glm::vec3 I_tmp, N_tmp;
     bool outside;
 
-	#pragma unroll 1
+#pragma unroll 1
     for (int i = 0; i < geoms_size; ++i)
     {
         const Geom& g = geoms[i];
         float t = -1.0f;
-        if (g.type == CUBE)        t = boxIntersectionTest(g, ray, I_tmp, N_tmp, outside);
-        else if (g.type == SPHERE) t = sphereIntersectionTest(g, ray, I_tmp, N_tmp, outside);
 
-        if (t > 0.0f && t < t_min) { t_min = t; hit_i = i; n_best = N_tmp; }
+        if (g.type == CUBE) {
+            t = boxIntersectionTest(g, ray, I_tmp, N_tmp, outside);
+        }
+        else if (g.type == SPHERE) {
+            t = sphereIntersectionTest(g, ray, I_tmp, N_tmp, outside);
+        }
+        else if (g.type == TRIANGLE_MESH && g.meshIndex >= 0) {
+            t = meshIntersectionTest(g, meshes[g.meshIndex], ray, I_tmp, N_tmp, outside);
+        }
+
+        if (t > 0.0f && t < t_min) {
+            t_min = t;
+            hit_i = i;
+            n_best = N_tmp;
+        }
     }
 
     ShadeableIntersection out;
@@ -265,6 +325,7 @@ __global__ void computeIntersectionsBVH(
     const Geom* __restrict__ geoms,
     const BVHNode* __restrict__ bvhNodes,
     const int* __restrict__ primIndices,
+    const TriangleMeshData* __restrict__ meshes,
     ShadeableIntersection* __restrict__ intersections)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -298,10 +359,15 @@ __global__ void computeIntersectionsBVH(
                 bool outside;
                 float t = -1.0f;
 
-                if (g.type == CUBE)
+                if (g.type == CUBE) {
                     t = boxIntersectionTest(g, ray, I_tmp, N_tmp, outside);
-                else if (g.type == SPHERE)
+                }
+                else if (g.type == SPHERE) {
                     t = sphereIntersectionTest(g, ray, I_tmp, N_tmp, outside);
+                }
+                else if (g.type == TRIANGLE_MESH && g.meshIndex >= 0) {
+                    t = meshIntersectionTest(g, meshes[g.meshIndex], ray, I_tmp, N_tmp, outside);
+                }
 
                 if (t > 0.0f && t < t_min) {
                     t_min = t;
@@ -328,6 +394,7 @@ __global__ void computeIntersectionsBVH(
     }
     intersections[idx] = out;
 }
+
 
 // Per-class shading over contiguous spans
 __global__ void shadeEmissiveRange(
@@ -356,7 +423,6 @@ __global__ void shadeEmissiveRange(
     path.color = glm::vec3(0.0f);
     path.remainingBounces = 0;
 }
-
 __global__ void shadeDiffuseRange(
     int iter, int n, int depth, int useRR, int useNEE,
     const ShadeableIntersection* __restrict__ isects,
@@ -374,15 +440,15 @@ __global__ void shadeDiffuseRange(
     if (ps.remainingBounces <= 0 || isect.t < 0.f) return;
 
     thrust::default_random_engine rng =
-        makeSeededRandomEngine(iter, i, ps.remainingBounces);
+        makeSeededRandomEngine(iter, paths[i].pixelIndex, depth);
 
     const glm::vec3 P = ps.ray.origin + ps.ray.direction * isect.t;
     const glm::vec3 N = isect.surfaceNormal;
     const glm::vec3 wo = -ps.ray.direction;
     const Material& m = materials[isect.materialId];
 
-    if (useNEE && numLights > 0) {
-        //if (i == 0) printf("Calling NEE: useNEE=%d, numLights=%d\n", useNEE, numLights);
+    // NEE only for diffuse surfaces
+    if (useNEE && numLights > 0 && isDiffuse(m)) {
         const glm::vec3 albedoTimesThroughput = m.color * ps.color;
         addDirectLighting_NEEDiffuse(
             P, N, wo,
@@ -394,6 +460,7 @@ __global__ void shadeDiffuseRange(
             image,
             rng);
     }
+
 
     scatterRay(ps, P, N, m, rng);
 
@@ -441,13 +508,13 @@ __global__ void shadeMaterials(
     }
 
     thrust::default_random_engine rng =
-        makeSeededRandomEngine(iter, idx, ps.remainingBounces);
+        makeSeededRandomEngine(iter, paths[idx].pixelIndex, depth);
 
     const glm::vec3 P = ps.ray.origin + ps.ray.direction * isect.t;
     const glm::vec3 N = isect.surfaceNormal;
     const glm::vec3 wo = -ps.ray.direction;
 
-    if (useNEE && numLights > 0) {
+    if (useNEE && numLights > 0 && isDiffuse(m)) {
         const glm::vec3 albedoTimesThroughput = m.color * ps.color;
         addDirectLighting_NEEDiffuse(
             P, N, wo,
@@ -506,12 +573,12 @@ void pathtrace(uchar4* pbo, int frame, int iter)
         if (useBVH && bvhBuilt) {
             computeIntersectionsBVH << <numblocksPathSegmentTracing, blockSize1d >> > (
                 depth, num_paths, dev_paths, dev_geoms,
-                dev_bvh.nodes, dev_bvh.primIndices, dev_intersections);
+                dev_bvh.nodes, dev_bvh.primIndices, dev_meshes, dev_intersections);
         }
         else {
             computeIntersections << <numblocksPathSegmentTracing, blockSize1d >> > (
                 depth, num_paths, dev_paths, dev_geoms,
-                hst_scene->geoms.size(), dev_intersections);
+                hst_scene->geoms.size(), dev_meshes, dev_intersections);
         }
         checkCUDAError("trace one bounce");
         cudaDeviceSynchronize();
@@ -538,8 +605,11 @@ void pathtrace(uchar4* pbo, int frame, int iter)
 
         bool doSort = !guiData ? true : guiData->SortByMaterial;
         if (doSort) {
+            // --- simple: sort by material id only ---
             buildMaterialKeys << <numblocksPathSegmentTracing, blockSize1d >> > (
                 num_paths, dev_intersections, dev_matKeys);
+            checkCUDAError("build material keys");
+
             thrust::sequence(thrust::device, dev_indices, dev_indices + num_paths);
 
             thrust::sort_by_key(thrust::device,
@@ -553,66 +623,17 @@ void pathtrace(uchar4* pbo, int frame, int iter)
 
             std::swap(dev_paths, dev_paths_alt);
             std::swap(dev_intersections, dev_intersections_alt);
-
-            buildTypeKeys << <numblocksPathSegmentTracing, blockSize1d >> > (
-                num_paths, dev_intersections, dev_materials, dev_typeKeys);
-            checkCUDAError("build type keys");
-
-            thrust::sequence(thrust::device, dev_indices, dev_indices + num_paths);
-
-            thrust::stable_sort_by_key(thrust::device,
-                dev_typeKeys, dev_typeKeys + num_paths,
-                dev_indices);
-
-            thrust::gather(thrust::device, dev_indices, dev_indices + num_paths,
-                dev_paths, dev_paths_alt);
-            thrust::gather(thrust::device, dev_indices, dev_indices + num_paths,
-                dev_intersections, dev_intersections_alt);
-            thrust::gather(thrust::device, dev_indices, dev_indices + num_paths,
-                dev_typeKeys, dev_typeKeys_alt);
-
-            std::swap(dev_paths, dev_paths_alt);
-            std::swap(dev_intersections, dev_intersections_alt);
-            std::swap(dev_typeKeys, dev_typeKeys_alt);
-
-            checkCUDAError("reorder by type");
-
-            thrust::device_ptr<int> kb(dev_typeKeys);
-            const int nEmissive = (int)(thrust::upper_bound(thrust::device, kb, kb + num_paths, SHADING_EMISSIVE) - kb);
-            const int nDiffuse = num_paths - nEmissive;
-
-            auto blocks = [&](int n) { return (n + blockSize1d - 1) / blockSize1d; };
-
-            if (nEmissive > 0) {
-                shadeEmissiveRange << <blocks(nEmissive), blockSize1d >> > (
-                    nEmissive, depth,
-                    dev_intersections, dev_materials, dev_paths,
-                    dev_geoms, dev_lightGeomIdx, hst_numLights,
-                    dev_image);
-                checkCUDAError("emissive shading");
-            }
-
-            if (nDiffuse > 0) {
-                shadeDiffuseRange << <blocks(nDiffuse), blockSize1d >> > (
-                    iter, nDiffuse, depth, useRR, useNEE,
-                    dev_intersections + nEmissive,
-                    dev_materials,
-                    dev_paths + nEmissive,
-                    dev_geoms, (int)hst_scene->geoms.size(),
-                    dev_lightGeomIdx, hst_numLights,
-                    dev_image);
-                checkCUDAError("diffuse shading");
-            }
+            checkCUDAError("reorder by material id");
         }
-        else {
-            shadeMaterials << <numblocksPathSegmentTracing, blockSize1d >> > (
-                iter, num_paths, depth, useRR, useNEE,
-                dev_intersections, dev_paths, dev_materials,
-                dev_geoms, (int)hst_scene->geoms.size(),
-                dev_lightGeomIdx, hst_numLights,
-                dev_image);
-            checkCUDAError("mega shading");
-        }
+        
+        shadeMaterials << <numblocksPathSegmentTracing, blockSize1d >> > (
+            iter, num_paths, depth, useRR, useNEE,
+            dev_intersections, dev_paths, dev_materials,
+            dev_geoms, (int)hst_scene->geoms.size(),
+            dev_lightGeomIdx, hst_numLights,
+            dev_image);
+        checkCUDAError("mega shading");
+        
 
         gatherTerminated << <numblocksPathSegmentTracing, blockSize1d >> > (
             num_paths, dev_image, dev_paths);
@@ -628,7 +649,7 @@ void pathtrace(uchar4* pbo, int frame, int iter)
             guiData->TracedDepth = depth;
         }
     }
-
+      
     dim3 numBlocksPixels = (pixelcount + blockSize1d - 1) / blockSize1d;
     finalGather << <numBlocksPixels, blockSize1d >> > (num_paths, dev_image, dev_paths);
 
