@@ -57,11 +57,36 @@ void Scene::loadFromGLTF(const std::string& gltfPath) {
         exit(-1);
     }
 
-    // Process materials first
+    // Load textures
+    std::cout << "Loading " << model.textures.size() << " textures...\n";
+    for (size_t i = 0; i < model.textures.size(); i++) {
+        const tinygltf::Texture& tex = model.textures[i];
+        const tinygltf::Image& image = model.images[tex.source];
+
+        Texture newTex;
+        newTex.width = image.width;
+        newTex.height = image.height;
+        newTex.channels = image.component;
+        newTex.data = nullptr;
+
+        textures.push_back({ image.image, newTex });
+    }
+
+    // Add default material
+    Material defaultMat{};
+    defaultMat.color = glm::vec3(0.7f);
+    defaultMat.metallic = 0.5f;
+    defaultMat.roughness = 0.5f;
+    defaultMat.baseColorTexture = -1;
+    defaultMat.metallicRoughnessTexture = -1;
+    defaultMat.normalTexture = -1;
+    defaultMat.emissiveTexture = -1;
+    materials.push_back(defaultMat);
+
+    // Load materials from glTF
     for (const auto& mat : model.materials) {
         Material newMat{};
 
-        // Get base color
         if (mat.pbrMetallicRoughness.baseColorFactor.size() == 4) {
             newMat.color = glm::vec3(
                 mat.pbrMetallicRoughness.baseColorFactor[0],
@@ -75,8 +100,27 @@ void Scene::loadFromGLTF(const std::string& gltfPath) {
 
         newMat.metallic = mat.pbrMetallicRoughness.metallicFactor;
         newMat.roughness = mat.pbrMetallicRoughness.roughnessFactor;
+        newMat.baseColorTexture = mat.pbrMetallicRoughness.baseColorTexture.index;
+        newMat.metallicRoughnessTexture = mat.pbrMetallicRoughness.metallicRoughnessTexture.index;
+        newMat.normalTexture = mat.normalTexture.index;
+        newMat.emissiveTexture = mat.emissiveTexture.index;
 
         materials.push_back(newMat);
+    }
+
+    // Override materials for testing (before adding lights)
+    for (size_t i = 1; i < materials.size(); i++) {
+        materials[i].color = glm::vec3(0.8f, 0.6f, 0.4f);
+        materials[i].metallic = 0.0f;
+        materials[i].roughness = 0.8f;
+    }
+
+    std::cout << "Loaded " << materials.size() << " materials:\n";
+    for (size_t i = 0; i < materials.size(); i++) {
+        std::cout << "  Material " << i << ": color=("
+            << materials[i].color.x << "," << materials[i].color.y << "," << materials[i].color.z
+            << ") metallic=" << materials[i].metallic
+            << " roughness=" << materials[i].roughness << "\n";
     }
 
     // Process scene nodes
@@ -84,8 +128,65 @@ void Scene::loadFromGLTF(const std::string& gltfPath) {
     for (int nodeIndex : scene.nodes) {
         processGLTFNode(model, nodeIndex, glm::mat4(1.0f));
     }
-}
 
+    std::cout << "Loaded " << geoms.size() << " geometries\n";
+    std::cout << "Loaded " << meshes.size() << " meshes\n";
+
+    int totalTriangles = 0;
+    for (const auto& mesh : meshes) {
+        totalTriangles += mesh.indices.size() / 3;
+    }
+    std::cout << "Total triangles: " << totalTriangles << "\n";
+
+    // Set up camera
+    Camera& camera = state.camera;
+    camera.resolution = glm::ivec2(800, 800);
+    camera.position = glm::vec3(0, 0.5f, 3.0f);
+    camera.lookAt = glm::vec3(0, 0.3f, 0);
+    camera.up = glm::vec3(0, 1, 0);
+
+    float fovy = 45.0f;
+    state.iterations = 5000;
+    state.traceDepth = 8;
+    state.imageName = "gltf_render";
+
+    float yscaled = tan(fovy * (PI / 180));
+    float xscaled = (yscaled * camera.resolution.x) / camera.resolution.y;
+    float fovx = (atan(xscaled) * 180) / PI;
+    camera.fov = glm::vec2(fovx, fovy);
+
+    camera.view = glm::normalize(camera.lookAt - camera.position);
+    camera.right = glm::normalize(glm::cross(camera.view, camera.up));
+    camera.pixelLength = glm::vec2(2 * xscaled / (float)camera.resolution.x,
+        2 * yscaled / (float)camera.resolution.y);
+
+    int arraylen = camera.resolution.x * camera.resolution.y;
+    state.image.resize(arraylen);
+    std::fill(state.image.begin(), state.image.end(), glm::vec3());
+
+    // Add lights AFTER material override
+    Material keyLight{};
+    keyLight.color = glm::vec3(1.0f, 1.0f, 1.0f);
+    keyLight.emittance = 50.0f;
+    keyLight.baseColorTexture = -1;
+    keyLight.metallicRoughnessTexture = -1;
+    keyLight.normalTexture = -1;
+    keyLight.emissiveTexture = -1;
+    materials.push_back(keyLight);
+
+    Geom keyLightGeom;
+    keyLightGeom.type = SPHERE;
+    keyLightGeom.materialid = materials.size() - 1;
+    keyLightGeom.translation = glm::vec3(5, 8, 5);
+    keyLightGeom.scale = glm::vec3(2.0f);
+    keyLightGeom.transform = utilityCore::buildTransformationMatrix(
+        keyLightGeom.translation, glm::vec3(0), keyLightGeom.scale);
+    keyLightGeom.inverseTransform = glm::inverse(keyLightGeom.transform);
+    keyLightGeom.invTranspose = glm::inverseTranspose(keyLightGeom.transform);
+    geoms.push_back(keyLightGeom);
+
+    std::cout << "Added " << geoms.size() << " total geoms (including lights)\n";
+}
 void Scene::processGLTFNode(const tinygltf::Model& model, int nodeIndex, const glm::mat4& parentTransform) {
     const tinygltf::Node& node = model.nodes[nodeIndex];
 
@@ -160,6 +261,7 @@ void Scene::processGLTFMesh(const tinygltf::Model& model, const tinygltf::Mesh& 
         std::vector<float> vertices;
         std::vector<float> normals;
         std::vector<unsigned int> indices;
+        std::vector<float> texcoords;
 
         // Get position data
         auto posIt = primitive.attributes.find("POSITION");
@@ -217,6 +319,8 @@ void Scene::processGLTFMesh(const tinygltf::Model& model, const tinygltf::Mesh& 
             }
         }
 
+
+
         // Get indices
         if (primitive.indices >= 0) {
             const tinygltf::Accessor& accessor = model.accessors[primitive.indices];
@@ -250,6 +354,27 @@ void Scene::processGLTFMesh(const tinygltf::Model& model, const tinygltf::Mesh& 
                 }
             }
         }
+        // Get texture coordinates
+        auto texIt = primitive.attributes.find("TEXCOORD_0");
+        if (texIt != primitive.attributes.end()) {
+            const tinygltf::Accessor& accessor = model.accessors[texIt->second];
+            const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
+            const tinygltf::Buffer& buffer = model.buffers[bufferView.buffer];
+
+            const float* data = reinterpret_cast<const float*>(
+                &buffer.data[bufferView.byteOffset + accessor.byteOffset]);
+
+            texcoords.resize(accessor.count * 2);
+            for (size_t i = 0; i < accessor.count; ++i) {
+                texcoords[i * 2] = data[i * 2];
+                texcoords[i * 2 + 1] = data[i * 2 + 1];
+            }
+        }
+        else {
+            // Default UVs if not provided
+            texcoords.resize((vertices.size() / 3) * 2, 0.0f);
+        }
+    
 
         // Create geometry for this mesh
         Geom newGeom;
@@ -268,6 +393,7 @@ void Scene::processGLTFMesh(const tinygltf::Model& model, const tinygltf::Mesh& 
         MeshData meshData;
         meshData.vertices = vertices;
         meshData.normals = normals;
+        meshData.texcoords = texcoords;  // Add this
         meshData.indices = indices;
 
         meshes.push_back(meshData);

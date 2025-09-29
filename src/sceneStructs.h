@@ -39,15 +39,17 @@ struct Geom
 };
 
 struct TriangleMeshData {
-    float* vertices;        // Device pointer: [x,y,z, x,y,z, ...]
-    float* normals;         // Device pointer: [nx,ny,nz, nx,ny,nz, ...]  
-    unsigned int* indices;  // Device pointer: [i0,i1,i2, i0,i1,i2, ...]
-    int triangleCount;      // Number of triangles (indices.size() / 3)
+    float* vertices;        
+    float* normals;         
+    float* texcoords;
+    unsigned int* indices;  
+    int triangleCount;    
 };
 
 struct MeshData {
     std::vector<float> vertices;
     std::vector<float> normals;
+    std::vector<float> texcoords; 
     std::vector<unsigned int> indices;
 };
 
@@ -64,9 +66,22 @@ struct Material
     float indexOfRefraction;
     float emittance;
 
-    float roughness;      // 0 = perfect smooth, 1 = very rough
-    float metallic;       // 0 = dielectric, 1 = metallic
+    float roughness;
+    float metallic;
+
+    // Texture support
+    int baseColorTexture;
+    int metallicRoughnessTexture;
+    int normalTexture;
+    int emissiveTexture;
 };
+
+struct Texture {
+    unsigned char* data;  // Device pointer to texture data
+    int width;
+    int height;
+    int channels;
+}; 
 
 struct Camera
 {

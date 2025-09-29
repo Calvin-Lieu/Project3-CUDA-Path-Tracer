@@ -134,7 +134,7 @@ void pathtraceInit(Scene* scene)
     cudaMalloc(&dev_paths_alt, pixelcount * sizeof(PathSegment));
     cudaMalloc(&dev_intersections_alt, pixelcount * sizeof(ShadeableIntersection));
 
-    if (!scene->meshes.empty()) {
+     if (!scene->meshes.empty()) {
         numMeshes = scene->meshes.size();
         cudaMalloc(&dev_meshes, numMeshes * sizeof(TriangleMeshData));
 
@@ -143,20 +143,26 @@ void pathtraceInit(Scene* scene)
         for (int i = 0; i < numMeshes; ++i) {
             const auto& hostMesh = scene->meshes[i];
 
-            // Allocate and copy vertex data
+            // Vertices
             cudaMalloc(&hostMeshes[i].vertices, hostMesh.vertices.size() * sizeof(float));
             cudaMemcpy(hostMeshes[i].vertices, hostMesh.vertices.data(),
                 hostMesh.vertices.size() * sizeof(float), cudaMemcpyHostToDevice);
 
-            // Allocate and copy normal data
+            // Normals
             cudaMalloc(&hostMeshes[i].normals, hostMesh.normals.size() * sizeof(float));
             cudaMemcpy(hostMeshes[i].normals, hostMesh.normals.data(),
                 hostMesh.normals.size() * sizeof(float), cudaMemcpyHostToDevice);
 
-            // Allocate and copy index data
+            // Texture coordinates
+            cudaMalloc(&hostMeshes[i].texcoords, hostMesh.texcoords.size() * sizeof(float));
+            cudaMemcpy(hostMeshes[i].texcoords, hostMesh.texcoords.data(),
+                hostMesh.texcoords.size() * sizeof(float), cudaMemcpyHostToDevice);
+
+            // Indices
             cudaMalloc(&hostMeshes[i].indices, hostMesh.indices.size() * sizeof(unsigned int));
             cudaMemcpy(hostMeshes[i].indices, hostMesh.indices.data(),
                 hostMesh.indices.size() * sizeof(unsigned int), cudaMemcpyHostToDevice);
+            
             hostMeshes[i].triangleCount = hostMesh.indices.size() / 3;
         }
 
