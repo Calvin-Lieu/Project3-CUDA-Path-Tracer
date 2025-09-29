@@ -128,6 +128,76 @@ __device__ bool intersectAABB(const Ray& ray, const glm::vec3& aabbMin, const gl
     return tNear <= tFar && tFar > 0.0f;
 }
 
+__device__ float singleTriangleIntersectionTest(
+    const Geom& geom,
+    const TriangleMeshData& mesh,
+    int triangleIndex,
+    const Ray& r,
+    glm::vec3& intersectionPoint,
+    glm::vec3& normal,
+    bool& outside)
+{
+    // Transform ray to object space
+    glm::vec3 ro = glm::vec3(geom.inverseTransform * glm::vec4(r.origin, 1.0f));
+    glm::vec3 rd = glm::normalize(glm::vec3(geom.inverseTransform * glm::vec4(r.direction, 0.0f)));
+
+    const float EPS = 1e-7f;
+
+    const unsigned int i0 = mesh.indices[triangleIndex * 3 + 0];
+    const unsigned int i1 = mesh.indices[triangleIndex * 3 + 1];
+    const unsigned int i2 = mesh.indices[triangleIndex * 3 + 2];
+
+    const glm::vec3 v0(mesh.vertices[i0 * 3], mesh.vertices[i0 * 3 + 1], mesh.vertices[i0 * 3 + 2]);
+    const glm::vec3 v1(mesh.vertices[i1 * 3], mesh.vertices[i1 * 3 + 1], mesh.vertices[i1 * 3 + 2]);
+    const glm::vec3 v2(mesh.vertices[i2 * 3], mesh.vertices[i2 * 3 + 1], mesh.vertices[i2 * 3 + 2]);
+
+    // Moller-Trumbore
+    const glm::vec3 e1 = v1 - v0;
+    const glm::vec3 e2 = v2 - v0;
+    const glm::vec3 pvec = glm::cross(rd, e2);
+    const float det = glm::dot(e1, pvec);
+
+    if (fabsf(det) < EPS) return -1.0f;
+
+    const float invDet = 1.0f / det;
+    const glm::vec3 tvec = ro - v0;
+    const float u = glm::dot(tvec, pvec) * invDet;
+
+    if (u < 0.0f || u > 1.0f) return -1.0f;
+
+    const glm::vec3 qvec = glm::cross(tvec, e1);
+    const float v = glm::dot(rd, qvec) * invDet;
+
+    if (v < 0.0f || (u + v) > 1.0f) return -1.0f;
+
+    const float t = glm::dot(e2, qvec) * invDet;
+
+    if (t <= EPS) return -1.0f;
+
+    // Interpolate normals
+    glm::vec3 objNormal;
+    if (mesh.normals) {
+        const glm::vec3 n0(mesh.normals[i0 * 3], mesh.normals[i0 * 3 + 1], mesh.normals[i0 * 3 + 2]);
+        const glm::vec3 n1(mesh.normals[i1 * 3], mesh.normals[i1 * 3 + 1], mesh.normals[i1 * 3 + 2]);
+        const glm::vec3 n2(mesh.normals[i2 * 3], mesh.normals[i2 * 3 + 1], mesh.normals[i2 * 3 + 2]);
+        const float w = 1.0f - u - v;
+        objNormal = glm::normalize(w * n0 + u * n1 + v * n2);
+    }
+    else {
+        objNormal = glm::normalize(glm::cross(e1, e2));
+    }
+
+    // Transform back to world space
+    const glm::vec3 Pobj = ro + rd * t;
+    intersectionPoint = glm::vec3(geom.transform * glm::vec4(Pobj, 1.0f));
+    normal = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(objNormal, 0.0f)));
+
+    outside = glm::dot(r.direction, normal) < 0.0f;
+    if (!outside) normal = -normal;
+
+    return glm::length(intersectionPoint - r.origin);
+}
+
 __device__ float meshIntersectionTest(
     const Geom& geom,
     const TriangleMeshData& mesh,
