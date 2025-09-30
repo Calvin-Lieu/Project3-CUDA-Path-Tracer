@@ -61,6 +61,7 @@ set(headers
     src/sortKeys.h
     src/directLighting.h
     src/bvh.h
+    src/textureSampling.h
 )
 
 set(sources
@@ -78,6 +79,7 @@ set(sources
     src/directLighting.cu
     src/bvh.cu
     src/tiny_gltf.cpp
+    src/textureSampling.cu
 )
 
 set(imgui_headers

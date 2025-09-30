@@ -196,7 +196,8 @@ __device__ glm::vec3 evalEmissiveWithMIS(
         return path.color * Le;
     }*/
 
-    if (depth == 1 || path.prevWasDelta) {
+    if (depth == 1 || path.prevWasDelta || path.prevBsdfPdf <= 0.0f)
+    {
         return path.color * Le;
     }
     const int hitGeomIdx = isect.geomId;

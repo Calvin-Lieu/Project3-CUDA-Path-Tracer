@@ -28,6 +28,7 @@
 #include "sortKeys.h"
 #include "directLighting.h"
 #include "bvh.h"
+#include "textureSampling.h"
 
 #define ERRORCHECK 1
 
@@ -528,6 +529,7 @@ __global__ void shadeMaterials(
     ShadeableIntersection* __restrict__ isects,
     PathSegment* paths,
     Material* __restrict__ materials,
+    const Texture* __restrict__ textures,
     const Geom* __restrict__ geoms, int ngeoms,
     const int* __restrict__ lightIdx, int numLights,
     glm::vec3* __restrict__ image)
@@ -541,11 +543,28 @@ __global__ void shadeMaterials(
     if (ps.remainingBounces <= 0) { ps.color = glm::vec3(0); return; }
     if (isect.t < 0.0f) { ps.color = glm::vec3(0); ps.remainingBounces = 0; return; }
 
-    Material& m = materials[isect.materialId];
+    Material m = materials[isect.materialId];
+
+    // Sample base color texture
+    glm::vec3 albedo = m.color;
+    if (textures && m.baseColorTexture >= 0) {
+        albedo *= sampleTexture(textures[m.baseColorTexture], isect.uv.x, isect.uv.y);
+    }
+    m.color = albedo;  // Update material with textured color
 
     if (m.emittance > 0.0f) {
         glm::vec3 Le = m.color * m.emittance;
-        glm::vec3 contrib = evalEmissiveWithMIS(ps, isect, Le, depth, geoms, lightIdx, numLights);
+        glm::vec3 contrib;
+
+        if (useNEE) {
+            // Use MIS when NEE is enabled
+            contrib = evalEmissiveWithMIS(ps, isect, Le, depth, geoms, lightIdx, numLights);
+        }
+        else {
+            // Without NEE, just use path throughput
+            contrib = ps.color * Le;
+        }
+
         atomicAddVec3(image, ps.pixelIndex, contrib);
         ps.color = glm::vec3(0);
         ps.remainingBounces = 0;
@@ -673,6 +692,7 @@ void pathtrace(uchar4* pbo, int frame, int iter)
         shadeMaterials << <numblocksPathSegmentTracing, blockSize1d >> > (
             iter, num_paths, depth, useRR, useNEE,
             dev_intersections, dev_paths, dev_materials,
+            dev_textures,
             dev_geoms, (int)hst_scene->geoms.size(),
             dev_lightGeomIdx, hst_numLights,
             dev_image);
