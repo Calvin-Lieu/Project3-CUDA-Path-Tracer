@@ -61,56 +61,57 @@ __host__ __device__ float boxIntersectionTest(
 __host__ __device__ float sphereIntersectionTest(
     Geom sphere,
     Ray r,
-    glm::vec3 &intersectionPoint,
-    glm::vec3 &normal,
-    bool &outside)
+    glm::vec3& intersectionPoint,
+    glm::vec3& normal,
+    bool& outside)
 {
-    float radius = .5;
+    // Define the sphere radius
+    constexpr float radius = 0.5f;
 
+    // Transform ray into object space
     glm::vec3 ro = multiplyMV(sphere.inverseTransform, glm::vec4(r.origin, 1.0f));
     glm::vec3 rd = glm::normalize(multiplyMV(sphere.inverseTransform, glm::vec4(r.direction, 0.0f)));
 
-    Ray rt;
-    rt.origin = ro;
-    rt.direction = rd;
+    // Quadratic coefficients for the sphere intersection
+    float a = glm::dot(rd, rd);
+    float b = 2.0f * glm::dot(ro, rd);
+    float c = glm::dot(ro, ro) - radius * radius;
 
-    float vDotDirection = glm::dot(rt.origin, rt.direction);
-    float radicand = vDotDirection * vDotDirection - (glm::dot(rt.origin, rt.origin) - powf(radius, 2));
-    if (radicand < 0)
-    {
-        return -1;
+    // Compute discriminant to check intersection
+    float discriminant = b * b - 4.0f * a * c;
+    if (discriminant < 0.0f) {
+        // No real roots; the ray misses the sphere
+        return -1.0f;
     }
 
-    float squareRoot = sqrt(radicand);
-    float firstTerm = -vDotDirection;
-    float t1 = firstTerm + squareRoot;
-    float t2 = firstTerm - squareRoot;
+    // Compute intersection points using the quadratic formula
+    float sqrtDiscriminant = sqrtf(discriminant);
+    float t1 = (-b - sqrtDiscriminant) / (2.0f * a);
+    float t2 = (-b + sqrtDiscriminant) / (2.0f * a);
 
-    float t = 0;
-    if (t1 < 0 && t2 < 0)
-    {
-        return -1;
-    }
-    else if (t1 > 0 && t2 > 0)
-    {
-        t = min(t1, t2);
-        outside = true;
-    }
-    else
-    {
-        t = max(t1, t2);
-        outside = false;
+    // Find the nearest valid intersection point
+    float t = (t1 > 0.0f) ? t1 : (t2 > 0.0f ? t2 : -1.0f);
+    if (t < 0.0f) {
+        // Both intersections are behind the ray origin
+        return -1.0f;
     }
 
-    glm::vec3 objspaceIntersection = getPointOnRay(rt, t);
+    // Set outside flag: if we used t1, we're outside; if t2, we're inside
+    outside = (t1 > 0.0f);
 
-    intersectionPoint = multiplyMV(sphere.transform, glm::vec4(objspaceIntersection, 1.f));
-    normal = glm::normalize(multiplyMV(sphere.invTranspose, glm::vec4(objspaceIntersection, 0.f)));
-    if (!outside)
-    {
+    // Compute object-space intersection point
+    glm::vec3 objSpaceIntersection = ro + t * rd;
+
+    // Transform intersection point and normal back to world space
+    intersectionPoint = multiplyMV(sphere.transform, glm::vec4(objSpaceIntersection, 1.0f));
+    normal = glm::normalize(multiplyMV(sphere.invTranspose, glm::vec4(objSpaceIntersection, 0.0f)));
+
+    // Flip normal if hitting from inside
+    if (!outside) {
         normal = -normal;
     }
 
+    // Return the distance from the ray origin to the intersection point
     return glm::length(r.origin - intersectionPoint);
 }
 
