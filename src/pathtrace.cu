@@ -102,6 +102,9 @@ static bool bvhBuilt = false;
 static TriangleMeshData* dev_meshes = nullptr;
 static int numMeshes = 0;
 
+static Texture* dev_textures = nullptr;
+static int numTextures = 0;
+
 void InitDataContainer(GuiDataContainer* imGuiData)
 {
     guiData = imGuiData;
@@ -194,6 +197,35 @@ void pathtraceInit(Scene* scene)
     //    printf("  Light %d: geom index %d\n", i, lightIdx[i]);
     //}
 
+    if (!scene->textures.empty()) {
+        numTextures = scene->textures.size();
+        std::cout << "Uploading " << numTextures << " textures to GPU...\n";
+
+        std::vector<Texture> hostTextures(numTextures);
+
+        for (int i = 0; i < numTextures; i++) {
+            auto& texPair = scene->textures[i];
+            Texture& tex = hostTextures[i];
+
+            tex.width = texPair.second.width;
+            tex.height = texPair.second.height;
+            tex.channels = texPair.second.channels;
+
+            size_t imageSize = tex.width * tex.height * tex.channels;
+
+            // Allocate GPU memory for texture data
+            cudaMalloc(&tex.data, imageSize);
+            cudaMemcpy(tex.data, texPair.first.data(), imageSize, cudaMemcpyHostToDevice);
+
+            std::cout << "  Texture " << i << ": " << tex.width << "x" << tex.height
+                << " (" << tex.channels << " channels)\n";
+        }
+
+        // Copy texture array to device
+        cudaMalloc(&dev_textures, numTextures * sizeof(Texture));
+        cudaMemcpy(dev_textures, hostTextures.data(),
+            numTextures * sizeof(Texture), cudaMemcpyHostToDevice);
+    }
     // Build BVH
     dev_bvh = BVHBuilder::build(scene->geoms, scene->meshes);
     bvhBuilt = true;
@@ -477,7 +509,7 @@ __global__ void shadeDiffuseRange(
 
     scatterRay(ps, P, N, m, rng);
 
-    if (useRR) applyRussianRoulette(ps, depth, 3, 0.05f, rng);
+    if (useRR) applyRussianRoulette(ps, depth, 3, rng);
 }
 
 __global__ void gatherTerminated(int n, glm::vec3* image, PathSegment* paths)
@@ -542,7 +574,7 @@ __global__ void shadeMaterials(
 
     scatterRay(ps, P, N, m, rng);
 
-    if (useRR) applyRussianRoulette(ps, depth, 3, 0.05f, rng);
+    if (useRR) applyRussianRoulette(ps, depth, 3, rng);
 }
 
 // Add the current iteration's output to the overall image
@@ -618,7 +650,6 @@ void pathtrace(uchar4* pbo, int frame, int iter)
 
         bool doSort = !guiData ? true : guiData->SortByMaterial;
         if (doSort) {
-            // --- simple: sort by material id only ---
             buildMaterialKeys << <numblocksPathSegmentTracing, blockSize1d >> > (
                 num_paths, dev_intersections, dev_matKeys);
             checkCUDAError("build material keys");

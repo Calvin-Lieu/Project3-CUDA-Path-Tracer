@@ -16,20 +16,20 @@ __device__ float rr_luminance(const glm::vec3& c) {
 __device__ void applyRussianRoulette(PathSegment& ps,
     int depth,
     int rrStartDepth,
-    float rrMinP,
     thrust::default_random_engine& rng)
 {
     if (depth < rrStartDepth) return;
 
-    thrust::uniform_real_distribution<float> uni01(0.f, 1.f);
+    thrust::uniform_real_distribution<float> u01(0.f, 1.f);
 
-    // Use throughput luminance as survival hint; clamp to < 1 to avoid blowups
-    float p = fminf(0.99f, fmaxf(rrMinP, rr_luminance(ps.color)));
+    // Termination probability (increases as throughput dims)
+    float q = fmaxf(0.05f, 1.0f - rr_luminance(ps.color));
 
-    if (uni01(rng) > p) {
-        ps.remainingBounces = 0;   // terminate
+    if (u01(rng) < q) {
+        ps.color = glm::vec3(0.0f);
+        ps.remainingBounces = 0;
     }
     else {
-        ps.color /= p;             // keep + compensate
+        ps.color /= (1.0f - q);
     }
 }

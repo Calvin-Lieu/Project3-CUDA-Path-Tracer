@@ -43,5 +43,4 @@ __device__ float rr_luminance(const glm::vec3& c);
 __device__ void applyRussianRoulette(PathSegment& ps,
     int depth,
     int rrStartDepth,  
-    float rrMinP,       
     thrust::default_random_engine& rng);
