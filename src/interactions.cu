@@ -36,9 +36,10 @@ __device__ inline float Lambda_GGX(float cosTheta, float alpha) {
 }
 
 __device__ inline float G_SmithGGX(float NoV, float NoL, float alpha) {
-    float lambdaV = Lambda_GGX(fabsf(NoV), alpha);
-    float lambdaL = Lambda_GGX(fabsf(NoL), alpha);
-    return 1.0f / (1.0f + lambdaV + lambdaL);
+    float a2 = alpha * alpha;
+    float GGXV = NoV * sqrtf(a2 + (1.0f - a2) * NoL * NoL);
+    float GGXL = NoL * sqrtf(a2 + (1.0f - a2) * NoV * NoV);
+    return 2.0f * NoL * NoV / (GGXV + GGXL + 1e-6f);
 }
 
 // --- Vec3 version (For metals/rough GGX) ---
@@ -192,7 +193,10 @@ __device__ void ggxSpecularBRDF(
     float NoV = fmaxf(1e-6f, fabsf(glm::dot(n, wo)));
     float NoL = fmaxf(0.0f, glm::dot(n, wi));
     if (NoL <= 0.0f) {
-        pathSegment.remainingBounces = 0;
+        pathSegment.color *= m.color;
+        pathSegment.ray.direction = calculateRandomDirectionInHemisphere(n, rng);
+        pathSegment.ray.origin = intersect + n * eps;
+        pathSegment.prevBsdfPdf = CUDART_PI_F;
         return;
     }
     float NoH = fmaxf(1e-6f, fabsf(glm::dot(n, h)));
@@ -207,7 +211,7 @@ __device__ void ggxSpecularBRDF(
     float pdf = (D * NoH) / (4.0f * HoV + 1e-6f);
     pdf = fmaxf(pdf, 1e-6f);
 
-    pathSegment.color *= f * (NoL / pdf);
+    pathSegment.color *= F * G * HoV / (NoV * NoH);
     pathSegment.prevBsdfPdf = pdf;
 
     pathSegment.ray.origin = intersect + n * eps;
@@ -270,7 +274,7 @@ __device__ void scatterRay(
 {
     if (m.hasReflective > 0.0f || m.metallic > 0.0f) {
         // GGX specular/metallic
-		printf("GGX Specular/Metallic\n");
+		//printf("GGX Specular/Metallic\n");
         ggxSpecularBRDF(pathSegment, normal, m, rng, intersect);
     }
     else if (m.hasRefractive > 0.0f) {
