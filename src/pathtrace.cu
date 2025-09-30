@@ -321,8 +321,10 @@ __global__ void computeIntersections(
     float t_min = 1e20f;
     int   hit_i = -1;
     glm::vec3 n_best = glm::vec3(0.0f);
+    glm::vec2 uv_best = glm::vec2(0.0f);  // Add UV tracking
 
     glm::vec3 I_tmp, N_tmp;
+    glm::vec2 uv_tmp;  // Add UV temp variable
     bool outside;
 
 #pragma unroll 1
@@ -333,18 +335,21 @@ __global__ void computeIntersections(
 
         if (g.type == CUBE) {
             t = boxIntersectionTest(g, ray, I_tmp, N_tmp, outside);
+            uv_tmp = glm::vec2(0.0f);  // Cubes don't have UVs yet
         }
         else if (g.type == SPHERE) {
             t = sphereIntersectionTest(g, ray, I_tmp, N_tmp, outside);
+            uv_tmp = glm::vec2(0.0f);  // Spheres don't have UVs yet
         }
         else if (g.type == TRIANGLE_MESH && g.meshIndex >= 0) {
-            t = meshIntersectionTest(g, meshes[g.meshIndex], ray, I_tmp, N_tmp, outside);
+            t = meshIntersectionTest(g, meshes[g.meshIndex], ray, I_tmp, N_tmp, outside, uv_tmp);
         }
 
         if (t > 0.0f && t < t_min) {
             t_min = t;
             hit_i = i;
             n_best = N_tmp;
+            uv_best = uv_tmp;  // Store UV from closest hit
         }
     }
 
@@ -354,6 +359,7 @@ __global__ void computeIntersections(
         out.materialId = geoms[hit_i].materialid;
         out.surfaceNormal = n_best;
         out.geomId = hit_i;
+        out.uv = uv_best;  // Store UV in output
     }
     intersections[idx] = out;
 }
@@ -378,6 +384,7 @@ __global__ void computeIntersectionsBVH(
 
     glm::vec3 I_tmp, N_tmp;
     bool outside;
+    glm::vec2 uv_best;
 
     // Stack for iterative BVH traversal
     int stack[64];
@@ -387,7 +394,7 @@ __global__ void computeIntersectionsBVH(
     while (stackPtr > 0) {
         int nodeIdx = stack[--stackPtr];
         const BVHNode& node = bvhNodes[nodeIdx];
-
+        
         // Test AABB
         if (!intersectAABB(ray, node.aabbMin, node.aabbMax))
             continue;
@@ -399,7 +406,7 @@ __global__ void computeIntersectionsBVH(
                 const Geom& g = geoms[prim.geomIndex];
 
                 float t = -1.0f;
-
+                glm::vec2 uv_tmp;
                 if (prim.type == PRIM_GEOM) {
                     // Test whole geometry (sphere or cube)
                     if (g.type == CUBE) {
@@ -413,13 +420,14 @@ __global__ void computeIntersectionsBVH(
                     // Test single triangle
                     t = singleTriangleIntersectionTest(g, meshes[g.meshIndex],
                         prim.triangleIndex, ray,
-                        I_tmp, N_tmp, outside);
+                        I_tmp, N_tmp, outside, uv_tmp);
                 }
 
                 if (t > 0.0f && t < t_min) {
                     t_min = t;
                     hit_i = prim.geomIndex;
                     n_best = N_tmp;
+                    uv_best = uv_tmp;  // Store the UV
                 }
             }
         }
@@ -438,6 +446,7 @@ __global__ void computeIntersectionsBVH(
         out.materialId = geoms[hit_i].materialid;
         out.surfaceNormal = n_best;
         out.geomId = hit_i;
+        out.uv = uv_best;
     }
     intersections[idx] = out;
 }
@@ -549,9 +558,13 @@ __global__ void shadeMaterials(
     glm::vec3 albedo = m.color;
     if (textures && m.baseColorTexture >= 0) {
         albedo *= sampleTexture(textures[m.baseColorTexture], isect.uv.x, isect.uv.y);
+        //if (iter == 1 && depth == 1) {
+        //    printf("Tex %d: UV(%.2f,%.2f) -> RGB(%.3f,%.3f,%.3f)\n",
+        //        m.baseColorTexture, isect.uv.x, isect.uv.y,
+        //        albedo.x, albedo.y, albedo.z);
+        //}
     }
     m.color = albedo;  // Update material with textured color
-
     if (m.emittance > 0.0f) {
         glm::vec3 Le = m.color * m.emittance;
         glm::vec3 contrib;

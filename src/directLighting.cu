@@ -159,9 +159,9 @@ __device__ void addDirectLighting_NEEDiffuse(
     const float w_l = (p_l * p_l) / (p_l * p_l + p_b * p_b);
 
     const glm::vec3 contrib = f * Le * cosS * (w_l / p_l);
-    if (pixelIndex == 320000 && contrib.x > 0.001f) {
-        printf("NEE adding: (%f, %f, %f) to pixel %d\n", contrib.x, contrib.y, contrib.z, pixelIndex);
-    }
+    //if (pixelIndex == 320000 && contrib.x > 0.001f) {
+    //    printf("NEE adding: (%f, %f, %f) to pixel %d\n", contrib.x, contrib.y, contrib.z, pixelIndex);
+    //}
 
     atomicAddVec3(image, pixelIndex, contrib);
 }

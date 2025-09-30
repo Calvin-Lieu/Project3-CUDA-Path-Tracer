@@ -28,8 +28,6 @@ __device__ bool visible(const glm::vec3& P, const glm::vec3& Q,
     const glm::vec3& N, const Geom* geoms, int ngeoms);
 
 // One-sample NEE for diffuse (MIS power heuristic)
-// NOTE: `albedo` should already be multiplied by the current throughput if you
-// want to accumulate straight to the image from this function.
 __device__ void addDirectLighting_NEEDiffuse(
     const glm::vec3& P,
     const glm::vec3& N,
