@@ -109,11 +109,11 @@ void Scene::loadFromGLTF(const std::string& gltfPath) {
     }
 
     // Override materials for testing (before adding lights)
-    for (size_t i = 1; i < materials.size(); i++) {
+    /*for (size_t i = 1; i < materials.size(); i++) {
         materials[i].color = glm::vec3(0.8f, 0.6f, 0.4f);
         materials[i].metallic = 0.0f;
         materials[i].roughness = 0.8f;
-    }
+    }*/
 
     std::cout << "Loaded " << materials.size() << " materials:\n";
     for (size_t i = 0; i < materials.size(); i++) {
@@ -187,6 +187,124 @@ void Scene::loadFromGLTF(const std::string& gltfPath) {
 
     std::cout << "Added " << geoms.size() << " total geoms (including lights)\n";
 }
+
+void Scene::loadGLTFIntoScene(const std::string& gltfPath, const glm::mat4& baseTransform) {
+    tinygltf::Model model;
+    tinygltf::TinyGLTF loader;
+    std::string err, warn;
+
+    if (!loader.LoadASCIIFromFile(&model, &err, &warn, gltfPath)) {
+        std::cerr << "Failed to load glTF: " << err << std::endl;
+        return;
+    }
+
+    // Load textures
+    int textureOffset = textures.size();
+    for (size_t i = 0; i < model.textures.size(); i++) {
+        const tinygltf::Texture& tex = model.textures[i];
+        const tinygltf::Image& image = model.images[tex.source];
+
+        Texture newTex;
+        newTex.width = image.width;
+        newTex.height = image.height;
+        newTex.channels = image.component;
+        newTex.data = nullptr;
+
+        textures.push_back({ image.image, newTex });
+    }
+
+    // Load materials
+    int materialOffset = materials.size();
+    for (const auto& mat : model.materials) {
+        Material newMat{};
+
+        if (mat.pbrMetallicRoughness.baseColorFactor.size() == 4) {
+            newMat.color = glm::vec3(
+                mat.pbrMetallicRoughness.baseColorFactor[0],
+                mat.pbrMetallicRoughness.baseColorFactor[1],
+                mat.pbrMetallicRoughness.baseColorFactor[2]
+            );
+        }
+
+        newMat.metallic = mat.pbrMetallicRoughness.metallicFactor;
+        newMat.roughness = mat.pbrMetallicRoughness.roughnessFactor;
+
+        // Adjust texture indices by offset
+        newMat.baseColorTexture = mat.pbrMetallicRoughness.baseColorTexture.index >= 0
+            ? mat.pbrMetallicRoughness.baseColorTexture.index + textureOffset : -1;
+
+        materials.push_back(newMat);
+    }
+
+    // Process scene nodes with the base transform
+    const tinygltf::Scene& scene = model.scenes[model.defaultScene];
+    for (int nodeIndex : scene.nodes) {
+        processGLTFNodeWithOffset(model, nodeIndex, baseTransform, materialOffset);
+    }
+}
+
+void Scene::processGLTFNodeWithOffset(const tinygltf::Model& model, int nodeIndex,
+    const glm::mat4& parentTransform, int materialOffset) {
+    const tinygltf::Node& node = model.nodes[nodeIndex];
+
+    // Calculate node transform
+    glm::mat4 nodeTransform = parentTransform;
+
+    if (node.matrix.size() == 16) {
+        // Node has a transformation matrix
+        glm::mat4 m;
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                m[i][j] = static_cast<float>(node.matrix[j * 4 + i]);
+            }
+        }
+        nodeTransform = parentTransform * m;
+    }
+    else {
+        // Build transform from TRS
+        glm::vec3 translation(0.0f);
+        glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
+        glm::vec3 scale(1.0f);
+
+        if (node.translation.size() == 3) {
+            translation = glm::vec3(
+                static_cast<float>(node.translation[0]),
+                static_cast<float>(node.translation[1]),
+                static_cast<float>(node.translation[2])
+            );
+        }
+        if (node.rotation.size() == 4) {
+            rotation = glm::quat(
+                static_cast<float>(node.rotation[3]),
+                static_cast<float>(node.rotation[0]),
+                static_cast<float>(node.rotation[1]),
+                static_cast<float>(node.rotation[2])
+            );
+        }
+        if (node.scale.size() == 3) {
+            scale = glm::vec3(
+                static_cast<float>(node.scale[0]),
+                static_cast<float>(node.scale[1]),
+                static_cast<float>(node.scale[2])
+            );
+        }
+
+        glm::mat4 T = glm::translate(glm::mat4(1.0f), translation);
+        glm::mat4 R = glm::mat4_cast(rotation);
+        glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
+        nodeTransform = parentTransform * T * R * S;
+    }
+
+    // Process mesh if present
+    if (node.mesh >= 0) {
+        processGLTFMesh(model, model.meshes[node.mesh], nodeTransform, materialOffset);
+    }
+
+    // Process children
+    for (int childIndex : node.children) {
+        processGLTFNodeWithOffset(model, childIndex, nodeTransform, materialOffset);
+    }
+}
 void Scene::processGLTFNode(const tinygltf::Model& model, int nodeIndex, const glm::mat4& parentTransform) {
     const tinygltf::Node& node = model.nodes[nodeIndex];
 
@@ -240,7 +358,7 @@ void Scene::processGLTFNode(const tinygltf::Model& model, int nodeIndex, const g
 
     // Process mesh if present
     if (node.mesh >= 0) {
-        processGLTFMesh(model, model.meshes[node.mesh], nodeTransform);
+        processGLTFMesh(model, model.meshes[node.mesh], nodeTransform, 0);
     }
 
     // Process children
@@ -249,7 +367,8 @@ void Scene::processGLTFNode(const tinygltf::Model& model, int nodeIndex, const g
     }
 }
 
-void Scene::processGLTFMesh(const tinygltf::Model& model, const tinygltf::Mesh& mesh, const glm::mat4& transform) {
+void Scene::processGLTFMesh(const tinygltf::Model& model, const tinygltf::Mesh& mesh,
+    const glm::mat4& transform, int materialOffset) {
     for (size_t primIdx = 0; primIdx < mesh.primitives.size(); ++primIdx) {
         const auto& primitive = mesh.primitives[primIdx];
 
@@ -379,7 +498,10 @@ void Scene::processGLTFMesh(const tinygltf::Model& model, const tinygltf::Mesh& 
         // Create geometry for this mesh
         Geom newGeom;
         newGeom.type = TRIANGLE_MESH;
-        newGeom.materialid = (primitive.material >= 0) ? primitive.material : 0;
+        newGeom.materialid = (primitive.material >= 0)
+            ? primitive.material + materialOffset
+            : 0;
+        //newGeom.materialid = (primitive.material >= 0) ? primitive.material : 0;
         newGeom.meshIndex = meshes.size(); // Index into our mesh array
 
         // Set transform
@@ -432,6 +554,21 @@ void Scene::loadFromJSON(const std::string& jsonName)
         {
             const auto& col = p["RGB"];
             newMaterial.color = glm::vec3(col[0], col[1], col[2]);
+            newMaterial.hasReflective = 1.0f;
+
+            if (p.contains("METALLIC")) {
+                newMaterial.metallic = p["METALLIC"];
+            }
+            else {
+                newMaterial.metallic = 0.0f;
+            }
+
+            if (p.contains("ROUGHNESS")) {
+                newMaterial.roughness = p["ROUGHNESS"];
+            }
+            else {
+                newMaterial.roughness = 0.0f;
+            }
         }
         else if (p["TYPE"] == "Refractive")
         {
@@ -458,6 +595,28 @@ void Scene::loadFromJSON(const std::string& jsonName)
     for (const auto& p : objectsData)
     {
         const auto& type = p["TYPE"];
+
+        if (type == "gltf") {
+            // Load the glTF file specified
+            std::string gltfFile = p["FILE"];
+
+            // Get transform parameters
+            const auto& trans = p["TRANS"];
+            const auto& rotat = p["ROTAT"];
+            const auto& scale = p["SCALE"];
+            glm::vec3 translation(trans[0], trans[1], trans[2]);
+            glm::vec3 rotation(rotat[0], rotat[1], rotat[2]);
+            glm::vec3 scaleVec(scale[0], scale[1], scale[2]);
+
+            // Build transform matrix
+            glm::mat4 transform = utilityCore::buildTransformationMatrix(
+                translation, rotation, scaleVec);
+
+            // Load the glTF with this transform
+            loadGLTFIntoScene(gltfFile, transform);
+            continue;
+        }
+
         Geom newGeom;
         if (type == "cube")
         {
