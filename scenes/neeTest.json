@@ -84,11 +84,11 @@
         },
         {
             "TYPE": "gltf",
-            "FILE": "../scenes/models/DragonDispersion/gltf/DragonDispersion.gltf",
+            "FILE": "../scenes/models/FlightHelmet/gltf/FlightHelmet.gltf",
             "MATERIAL": "diffuse_white",
             "TRANS": [ 0.0, 1.5, 2.0 ],
             "ROTAT": [ 0.0, 0.0, 0.0 ],
-            "SCALE": [ 2.0, 2.0, 2.0 ]
+            "SCALE": [ 5.0, 5.0, 5.0 ]
         },
         {
             "TYPE": "cube",

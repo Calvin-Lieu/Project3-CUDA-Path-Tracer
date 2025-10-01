@@ -198,10 +198,10 @@ __device__ float singleTriangleIntersectionTest(
         uv = w_bary * uv0 + u_bary * uv1 + v_bary * uv2;
         if (mesh.texcoords && u_bary > 0.0f && v_bary > 0.0f) {
             uv = w_bary * uv0 + u_bary * uv1 + v_bary * uv2;
-            // Print ONCE per kernel launch
-            if (threadIdx.x == 0 && blockIdx.x == 0) {
-                printf("Triangle UV computed: (%.3f, %.3f)\n", uv.x, uv.y);
-            }
+            //// Print ONCE per kernel launch
+            //if (threadIdx.x == 0 && blockIdx.x == 0) {
+            //    printf("Triangle UV computed: (%.3f, %.3f)\n", uv.x, uv.y);
+            //}
         }
     }
     else {

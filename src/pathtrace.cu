@@ -565,6 +565,13 @@ __global__ void shadeMaterials(
         //}
     }
     m.color = albedo;  // Update material with textured color
+
+    if (textures && m.metallicRoughnessTexture >= 0) {
+        glm::vec3 mr = sampleTexture(textures[m.metallicRoughnessTexture], isect.uv.x, isect.uv.y);
+        m.metallic *= mr.b;   // Blue channel = metallic
+        m.roughness *= mr.g;  // Green channel = roughness
+    }
+
     if (m.emittance > 0.0f) {
         glm::vec3 Le = m.color * m.emittance;
         glm::vec3 contrib;
