@@ -63,6 +63,7 @@ set(headers
     src/bvh.h
     src/textureSampling.h
     src/environmentSampling.h
+    src/loader.h
 )
 
 set(sources
@@ -81,6 +82,7 @@ set(sources
     src/bvh.cu
     src/tiny_gltf.cpp
     src/textureSampling.cu
+    src/loader.cpp
 )
 
 set(imgui_headers
