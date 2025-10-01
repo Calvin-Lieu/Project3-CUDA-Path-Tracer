@@ -62,6 +62,7 @@ set(headers
     src/directLighting.h
     src/bvh.h
     src/textureSampling.h
+    src/environmentSampling.h
 )
 
 set(sources

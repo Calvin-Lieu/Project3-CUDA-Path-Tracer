@@ -38,7 +38,8 @@ __device__ void addDirectLighting_NEEDiffuse(
     const glm::vec3& albedo,
     int pixelIndex,
     glm::vec3* __restrict__ image,
-    thrust::default_random_engine& rng);
+    thrust::default_random_engine& rng,
+    const EnvironmentMap* __restrict__ envMap);
 
 __device__ float computeLightPdf(
     const glm::vec3& P,

@@ -97,28 +97,26 @@
             "ROTAT": [ 0, 0, 0 ],
             "SCALE": [ 0.2, 12.0, 30.0 ]
         },
-
-
         {
             "TYPE": "cube",
             "MATERIAL": "light_warm",
             "TRANS": [ -8.0, 11.8, -10.0 ],
             "ROTAT": [ 0, 0, 0 ],
-            "SCALE": [ 0.3, 0.01, 0.3 ]
+            "SCALE": [ 3.0, 0.3, 3.0 ]
         },
         {
             "TYPE": "cube",
             "MATERIAL": "light_cool",
             "TRANS": [ 0.0, 11.8, 0.0 ],
             "ROTAT": [ 0, 0, 0 ],
-            "SCALE": [ 0.3, 0.01, 0.3 ]
+            "SCALE": [ 3.0, 0.3, 3.0 ]
         },
         {
             "TYPE": "cube",
             "MATERIAL": "light_warm",
             "TRANS": [ 8.0, 11.8, 10.0 ],
             "ROTAT": [ 0, 0, 0 ],
-            "SCALE": [ 0.3, 0.01, 0.3 ]
+            "SCALE": [ 3.0, 0.3, 3.0 ]
         },
 
 

@@ -21,6 +21,7 @@ public:
     std::vector<Material> materials;
     std::vector<MeshData> meshes;
     std::vector<std::pair<std::vector<unsigned char>, Texture>> textures;
+    std::string environmentMapPath;
     RenderState state;
 };
 

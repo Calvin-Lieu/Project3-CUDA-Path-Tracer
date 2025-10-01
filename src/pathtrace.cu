@@ -4,6 +4,7 @@
 #include <cuda.h>
 #include <cmath>
 #include <climits>
+#include <iostream>
 #include <utility>
 #include <thrust/execution_policy.h>
 #include <thrust/random.h>
@@ -16,6 +17,7 @@
 #include <thrust/tuple.h>
 #include <thrust/device_ptr.h>
 #include <thrust/binary_search.h>
+#include <stb_image.h>
 
 #include "sceneStructs.h"
 #include "scene.h"
@@ -29,6 +31,7 @@
 #include "directLighting.h"
 #include "bvh.h"
 #include "textureSampling.h"
+#include "environmentSampling.h"
 
 #define ERRORCHECK 1
 
@@ -106,9 +109,83 @@ static int numMeshes = 0;
 static Texture* dev_textures = nullptr;
 static int numTextures = 0;
 
+static EnvironmentMap* dev_envMap = nullptr;  
+static cudaArray_t envMapArray = nullptr;     
+static bool hasEnvironmentMap = false;
+
 void InitDataContainer(GuiDataContainer* imGuiData)
 {
     guiData = imGuiData;
+}
+
+void buildEnvironmentCDFsFromFloat(const std::vector<float>& imageData,
+    int width, int height,
+    EnvironmentMap& envMap)
+{
+    std::vector<float> luminance(width * height);
+
+    // Compute luminance for each pixel
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int idx = (y * width + x) * 4;
+            float r = imageData[idx];
+            float g = imageData[idx + 1];
+            float b = imageData[idx + 2];
+
+            // Weight by solid angle
+            float theta = PI * (y + 0.5f) / height;
+            float sinTheta = sinf(theta);
+
+            luminance[y * width + x] = (0.2126f * r + 0.7152f * g + 0.0722f * b) * sinTheta;
+        }
+    }
+
+    // Build conditional CDFs (one per row)
+    std::vector<float> conditionalCDF(width * height);
+    std::vector<float> rowIntegrals(height);
+
+    for (int y = 0; y < height; y++) {
+        float sum = 0.0f;
+        for (int x = 0; x < width; x++) {
+            sum += luminance[y * width + x];
+            conditionalCDF[y * width + x] = sum;
+        }
+
+        rowIntegrals[y] = sum;
+
+        // Normalize this row's CDF
+        if (sum > 0.0f) {
+            for (int x = 0; x < width; x++) {
+                conditionalCDF[y * width + x] /= sum;
+            }
+        }
+    }
+
+    // Build marginal CDF (over rows)
+    std::vector<float> marginalCDF(height);
+    float totalSum = 0.0f;
+    for (int y = 0; y < height; y++) {
+        totalSum += rowIntegrals[y];
+        marginalCDF[y] = totalSum;
+    }
+
+    // Normalize marginal CDF
+    if (totalSum > 0.0f) {
+        for (int y = 0; y < height; y++) {
+            marginalCDF[y] /= totalSum;
+        }
+    }
+
+    envMap.totalLuminance = totalSum;
+
+    // Copy to device
+    cudaMalloc(&envMap.marginalCDF, height * sizeof(float));
+    cudaMemcpy(envMap.marginalCDF, marginalCDF.data(),
+        height * sizeof(float), cudaMemcpyHostToDevice);
+
+    cudaMalloc(&envMap.conditionalCDF, width * height * sizeof(float));
+    cudaMemcpy(envMap.conditionalCDF, conditionalCDF.data(),
+        width * height * sizeof(float), cudaMemcpyHostToDevice);
 }
 
 void pathtraceInit(Scene* scene)
@@ -227,6 +304,54 @@ void pathtraceInit(Scene* scene)
         cudaMemcpy(dev_textures, hostTextures.data(),
             numTextures * sizeof(Texture), cudaMemcpyHostToDevice);
     }
+
+    if (!hst_scene->environmentMapPath.empty()) {
+        std::cout << "Loading environment map: " << hst_scene->environmentMapPath << "\n";
+
+        int width, height, channels;
+        float* data = stbi_loadf(hst_scene->environmentMapPath.c_str(),
+            &width, &height, &channels, 4);
+
+        if (data) {
+            // Create CUDA texture
+            cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc(32, 32, 32, 32,
+                cudaChannelFormatKindFloat);
+            cudaMallocArray(&envMapArray, &channelDesc, width, height);
+            cudaMemcpy2DToArray(envMapArray, 0, 0, data, width * 4 * sizeof(float),
+                width * 4 * sizeof(float), height, cudaMemcpyHostToDevice);
+
+            cudaResourceDesc resDesc = {};
+            resDesc.resType = cudaResourceTypeArray;
+            resDesc.res.array.array = envMapArray;
+
+            cudaTextureDesc texDesc = {};
+            texDesc.addressMode[0] = cudaAddressModeWrap;
+            texDesc.addressMode[1] = cudaAddressModeClamp;
+            texDesc.filterMode = cudaFilterModeLinear;
+            texDesc.readMode = cudaReadModeElementType;
+            texDesc.normalizedCoords = 1;
+
+            // Host-side struct to build
+            EnvironmentMap hostEnvMap;
+            cudaCreateTextureObject(&hostEnvMap.texture, &resDesc, &texDesc, nullptr);
+            hostEnvMap.width = width;
+            hostEnvMap.height = height;
+
+            // Build CDFs
+            std::vector<float> floatVec(data, data + width * height * 4);
+            buildEnvironmentCDFsFromFloat(floatVec, width, height, hostEnvMap);
+
+            // Allocate struct on device and copy
+            cudaMalloc(&dev_envMap, sizeof(EnvironmentMap));
+            cudaMemcpy(dev_envMap, &hostEnvMap, sizeof(EnvironmentMap), cudaMemcpyHostToDevice);
+
+            hasEnvironmentMap = true;
+            stbi_image_free(data);
+
+            std::cout << "Environment map loaded: " << width << "x" << height << "\n";
+            std::cout << "Total luminance: " << hostEnvMap.totalLuminance << "\n";
+        }
+    }
     // Build BVH
     dev_bvh = BVHBuilder::build(scene->geoms, scene->meshes);
     bvhBuilt = true;
@@ -264,6 +389,35 @@ void pathtraceFree()
         numMeshes = 0;
     }
 
+    if (dev_textures) {
+        Texture* hostTextures = new Texture[numTextures];
+        cudaMemcpy(hostTextures, dev_textures, numTextures * sizeof(Texture),
+            cudaMemcpyDeviceToHost);
+
+        for (int i = 0; i < numTextures; i++) {
+            if (hostTextures[i].data) cudaFree(hostTextures[i].data);
+        }
+        delete[] hostTextures;
+        cudaFree(dev_textures);
+        dev_textures = nullptr;
+    }
+
+    // Free environment map
+    if (hasEnvironmentMap) {
+        EnvironmentMap hostEnvMap;
+        cudaMemcpy(&hostEnvMap, dev_envMap, sizeof(EnvironmentMap),
+            cudaMemcpyDeviceToHost);
+
+        cudaDestroyTextureObject(hostEnvMap.texture);
+        cudaFreeArray(envMapArray);
+        cudaFree(hostEnvMap.marginalCDF);
+        cudaFree(hostEnvMap.conditionalCDF);
+        cudaFree(dev_envMap);
+
+        dev_envMap = nullptr;
+        envMapArray = nullptr;
+        hasEnvironmentMap = false;
+    }
     BVHBuilder::free(dev_bvh);
     checkCUDAError("pathtraceFree");
 }
@@ -302,6 +456,7 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
         segment.remainingBounces = traceDepth;
     }
 }
+
 
 // Slightly optimized intersection kernel
 __global__ void computeIntersections(
@@ -478,49 +633,50 @@ __global__ void shadeEmissiveRange(
     path.color = glm::vec3(0.0f);
     path.remainingBounces = 0;
 }
-__global__ void shadeDiffuseRange(
-    int iter, int n, int depth, int useRR, int useNEE,
-    const ShadeableIntersection* __restrict__ isects,
-    const Material* __restrict__ materials,
-    PathSegment* paths,
-    const Geom* __restrict__ geoms, int ngeoms,
-    const int* __restrict__ lightIdx, int numLights,
-    glm::vec3* __restrict__ image)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-
-    const ShadeableIntersection isect = isects[i];
-    PathSegment& ps = paths[i];
-    if (ps.remainingBounces <= 0 || isect.t < 0.f) return;
-
-    thrust::default_random_engine rng =
-        makeSeededRandomEngine(iter, paths[i].pixelIndex, depth);
-
-    const glm::vec3 P = ps.ray.origin + ps.ray.direction * isect.t;
-    const glm::vec3 N = isect.surfaceNormal;
-    const glm::vec3 wo = -ps.ray.direction;
-    const Material& m = materials[isect.materialId];
-
-    // NEE only for diffuse surfaces
-    if (useNEE && numLights > 0 && isDiffuse(m)) {
-        const glm::vec3 albedoTimesThroughput = m.color * ps.color;
-        addDirectLighting_NEEDiffuse(
-            P, N, wo,
-            materials,
-            geoms, ngeoms,
-            lightIdx, numLights,
-            albedoTimesThroughput,
-            ps.pixelIndex,
-            image,
-            rng);
-    }
-
-
-    scatterRay(ps, P, N, m, rng);
-
-    if (useRR) applyRussianRoulette(ps, depth, 3, rng);
-}
+//__global__ void shadeDiffuseRange(
+//    int iter, int n, int depth, int useRR, int useNEE,
+//    const ShadeableIntersection* __restrict__ isects,
+//    const Material* __restrict__ materials,
+//    PathSegment* paths,
+//    const Geom* __restrict__ geoms, int ngeoms,
+//    const int* __restrict__ lightIdx, int numLights,
+//    glm::vec3* __restrict__ image)
+//{
+//    int i = blockIdx.x * blockDim.x + threadIdx.x;
+//    if (i >= n) return;
+//
+//    const ShadeableIntersection isect = isects[i];
+//    PathSegment& ps = paths[i];
+//    if (ps.remainingBounces <= 0 || isect.t < 0.f) return;
+//
+//    thrust::default_random_engine rng =
+//        makeSeededRandomEngine(iter, paths[i].pixelIndex, depth);
+//
+//    const glm::vec3 P = ps.ray.origin + ps.ray.direction * isect.t;
+//    const glm::vec3 N = isect.surfaceNormal;
+//    const glm::vec3 wo = -ps.ray.direction;
+//    const Material& m = materials[isect.materialId];
+//
+//    // NEE only for diffuse surfaces
+//   if (useNEE && (numLights > 0 || envMap) && isDiffuse(m)) {
+//        const glm::vec3 albedoTimesThroughput = m.color * ps.color;
+//        addDirectLighting_NEEDiffuse(
+//            P, N, wo,
+//            materials,
+//            geoms, ngeoms,
+//            lightIdx, numLights,
+//            albedoTimesThroughput,
+//            ps.pixelIndex,
+//            image,
+//            rng,
+//            envMap);
+//    }
+//
+//
+//    scatterRay(ps, P, N, m, rng);
+//
+//    if (useRR) applyRussianRoulette(ps, depth, 3, rng);
+//}
 
 __global__ void gatherTerminated(int n, glm::vec3* image, PathSegment* paths)
 {
@@ -539,6 +695,7 @@ __global__ void shadeMaterials(
     PathSegment* paths,
     Material* __restrict__ materials,
     const Texture* __restrict__ textures,
+    const EnvironmentMap* envMap,
     const Geom* __restrict__ geoms, int ngeoms,
     const int* __restrict__ lightIdx, int numLights,
     glm::vec3* __restrict__ image)
@@ -546,12 +703,32 @@ __global__ void shadeMaterials(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_paths) return;
 
+    if (iter == 1 && idx == 0) {
+        printf("shadeMaterials called: envMap = %p\n", envMap);
+        if (envMap) {
+            printf("  envMap exists on device\n");
+        }
+    }
     const ShadeableIntersection isect = isects[idx];
     PathSegment& ps = paths[idx];
-
+    if (iter == 1 && idx == 0) {
+        printf("shadeMaterials: envMap pointer = %p\n", envMap);
+        if (envMap) {
+            printf("  envMap.width = %d, height = %d\n", envMap->width, envMap->height);
+            printf("  envMap.totalLuminance = %f\n", envMap->totalLuminance);
+        }
+    }
     if (ps.remainingBounces <= 0) { ps.color = glm::vec3(0); return; }
-    if (isect.t < 0.0f) { ps.color = glm::vec3(0); ps.remainingBounces = 0; return; }
-
+    if (isect.t < 0.0f) {
+        if (envMap) {
+            glm::vec3 envColor = sampleEnvironmentMap(ps.ray.direction, *envMap);
+            atomicAddVec3(image, ps.pixelIndex, ps.color * envColor);
+        }
+        ps.color = glm::vec3(0);
+        ps.remainingBounces = 0;
+        return;
+    }
+    
     Material m = materials[isect.materialId];
 
     // Sample base color texture
@@ -608,12 +785,18 @@ __global__ void shadeMaterials(
             albedoTimesThroughput,
             ps.pixelIndex,
             image,
-            rng);
+            rng,
+            envMap);
     }
 
     scatterRay(ps, P, N, m, rng);
 
     if (useRR) applyRussianRoulette(ps, depth, 3, rng);
+
+    //if (envMap) {
+    //    glm::vec3 envColor = sampleEnvironmentMap(ps.ray.direction, *envMap);
+    //    atomicAddVec3(image, ps.pixelIndex, ps.color * envColor * 1.0f); // small contribution
+    //}
 }
 
 // Add the current iteration's output to the overall image
@@ -708,11 +891,11 @@ void pathtrace(uchar4* pbo, int frame, int iter)
             std::swap(dev_intersections, dev_intersections_alt);
             checkCUDAError("reorder by material id");
         }
-        
+        EnvironmentMap* dev_envMapPtr = hasEnvironmentMap ? dev_envMap : nullptr;
         shadeMaterials << <numblocksPathSegmentTracing, blockSize1d >> > (
             iter, num_paths, depth, useRR, useNEE,
             dev_intersections, dev_paths, dev_materials,
-            dev_textures,
+            dev_textures, dev_envMapPtr, 
             dev_geoms, (int)hst_scene->geoms.size(),
             dev_lightGeomIdx, hst_numLights,
             dev_image);

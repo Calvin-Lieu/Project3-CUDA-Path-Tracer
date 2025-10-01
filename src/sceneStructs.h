@@ -74,6 +74,11 @@ struct Material
     int metallicRoughnessTexture;
     int normalTexture;
     int emissiveTexture;
+
+    float transmission = 1.0f;          // like KHR_materials_transmission
+    float thickness = 0.0f;             // volume thickness
+    float attenuationDistance = 1e6f;   // volume absorption distance
+    glm::vec3 attenuationColor = glm::vec3(1.0f); // absorption tint
 };
 
 struct Texture {
@@ -81,7 +86,16 @@ struct Texture {
     int width;
     int height;
     int channels;
-}; 
+};
+
+struct EnvironmentMap {
+    cudaTextureObject_t texture;
+    int width;
+    int height;
+    float* marginalCDF;      
+    float* conditionalCDF;  
+    float totalLuminance;
+};
 
 struct Camera
 {

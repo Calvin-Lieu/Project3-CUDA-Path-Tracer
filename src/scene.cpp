@@ -515,7 +515,7 @@ void Scene::processGLTFMesh(const tinygltf::Model& model, const tinygltf::Mesh& 
         MeshData meshData;
         meshData.vertices = vertices;
         meshData.normals = normals;
-        meshData.texcoords = texcoords;  // Add this
+        meshData.texcoords = texcoords;
         meshData.indices = indices;
 
         meshes.push_back(meshData);
@@ -575,18 +575,59 @@ void Scene::loadFromJSON(const std::string& jsonName)
             const auto& col = p["RGB"];
             newMaterial.color = glm::vec3(col[0], col[1], col[2]);
             newMaterial.hasRefractive = 1.0f;
+
+            // IOR (default 1.5)
             if (p.contains("IOR")) {
                 newMaterial.indexOfRefraction = p["IOR"];
             }
             else {
-                newMaterial.indexOfRefraction = 1.5f; // Default glass IOR
+                newMaterial.indexOfRefraction = 1.5f;
             }
+
+            // Roughness (optional, for frosted glass)
             if (p.contains("ROUGHNESS")) {
                 newMaterial.roughness = p["ROUGHNESS"];
             }
+
+            // Transmission factor 
+            if (p.contains("TRANSMISSION")) {
+                newMaterial.transmission = p["TRANSMISSION"];
+            }
+            else {
+                newMaterial.transmission = 1.0f;
+            }
+
+            // Volume extension support
+            if (p.contains("THICKNESS")) {
+                newMaterial.thickness = p["THICKNESS"];
+            }
+            else {
+                newMaterial.thickness = 0.0f;
+            }
+
+            if (p.contains("ATTENUATION_DISTANCE")) {
+                newMaterial.attenuationDistance = p["ATTENUATION_DISTANCE"];
+            }
+            else {
+                newMaterial.attenuationDistance = 1e6f; // "no absorption"
+            }
+
+            if (p.contains("ATTENUATION_COLOR")) {
+                const auto& ac = p["ATTENUATION_COLOR"];
+                newMaterial.attenuationColor = glm::vec3(ac[0], ac[1], ac[2]);
+            }
+            else {
+                newMaterial.attenuationColor = glm::vec3(1.0f);
+            }
+
             std::cout << "Loaded refractive material '" << name << "': "
-                << "hasRefractive=" << newMaterial.hasRefractive
-                << ", IOR=" << newMaterial.indexOfRefraction << "\n";
+                << "IOR=" << newMaterial.indexOfRefraction
+                << " transmission=" << newMaterial.transmission
+                << " thickness=" << newMaterial.thickness
+                << " attenDist=" << newMaterial.attenuationDistance
+                << " attenColor=(" << newMaterial.attenuationColor.r << ","
+                << newMaterial.attenuationColor.g << ","
+                << newMaterial.attenuationColor.b << ")\n";
         }
         MatNameToID[name] = materials.size();
         materials.emplace_back(newMaterial);
@@ -672,4 +713,12 @@ void Scene::loadFromJSON(const std::string& jsonName)
     int arraylen = camera.resolution.x * camera.resolution.y;
     state.image.resize(arraylen);
     std::fill(state.image.begin(), state.image.end(), glm::vec3());
+
+    if (data.contains("Background")) {
+        const auto& backgroundData = data["Background"];
+        if (backgroundData["TYPE"] == "skybox" && backgroundData.contains("PATH")) {
+            environmentMapPath = backgroundData["PATH"];
+            std::cout << "Environment map path set to: " << environmentMapPath << "\n";
+        }
+    }
 }

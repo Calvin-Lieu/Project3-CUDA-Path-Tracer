@@ -1,0 +1,66 @@
+{
+    "Background": {
+        "TYPE": "skybox",
+        "PATH": "../scenes/environments/brown_photostudio_02_4k.hdr"
+    },
+    "Materials": {
+        "default": {
+            "TYPE": "Diffuse",
+            "RGB": [ 1.0, 1.0, 1.0 ]
+        },
+        "glass": {
+            "TYPE": "Refractive",
+            "RGB": [ 1.0, 1.0, 1.0 ],
+            "ROUGHNESS": 0.0,
+            "IOR": 1.5,
+            "HASREFRACTIVE": 1.0
+        },
+        "diamond": {
+            "TYPE": "Refractive",
+            "RGB": [ 1.0, 1.0, 1.0 ],
+            "ROUGHNESS": 0.0,
+            "IOR": 2.4,
+            "HASREFRACTIVE": 1.0
+        },
+        "metal_gold": {
+            "TYPE": "Specular",
+            "RGB": [ 1.0, 0.85, 0.57 ],
+            "ROUGHNESS": 0.1,
+            "METALLIC": 1.0,
+            "HASREFLECTIVE": 1.0
+        }
+    },
+    "Camera": {
+        "RES": [ 1280, 720 ],
+        "FOVY": 35.0,
+        "ITERATIONS": 5000,
+        "DEPTH": 12,
+        "FILE": "helmet_studio",
+        "EYE": [ 0.0, 0.4, 1.5 ],
+        "LOOKAT": [ 0.0, 0.3, 0.0 ],
+        "UP": [ 0.0, 1.0, 0.0 ]
+    },
+    "Objects": [
+        {
+            "TYPE": "sphere",
+            "MATERIAL": "glass",
+            "TRANS": [ -1.0, 4.0, 3.0 ],
+            "ROTAT": [ 0.0, 0.0, 0.0 ],
+            "SCALE": [ 3.0, 3.0, 3.0 ]
+        },
+        {
+            "TYPE": "sphere",
+            "MATERIAL": "glass",
+            "TRANS": [ 3.0, 2.0, 0.0 ],
+            "ROTAT": [ 0.0, 0.0, 0.0 ],
+            "SCALE": [ 1.5, 1.5, 1.5 ]
+        },
+        {
+            "TYPE": "sphere",
+            "MATERIAL": "metal_gold",
+            "TRANS": [ -2.0, 2.0, 1.0 ],
+            "ROTAT": [ 0.0, 0.0, 0.0 ],
+            "SCALE": [ 1.5, 1.5, 1.5 ]
+        }
+    ]
+}

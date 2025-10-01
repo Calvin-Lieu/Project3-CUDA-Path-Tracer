@@ -21,12 +21,11 @@ struct IsDeadPath {
 
 struct MarkMissDead {
     __host__ __device__
-        void operator()(thrust::tuple<PathSegment&, const ShadeableIntersection&> t) const {
-        PathSegment& p = thrust::get<0>(t);
-        const ShadeableIntersection& isect = thrust::get<1>(t);
-        if (isect.t < 0.0f) {
-            p.color = glm::vec3(0.0f);
-            p.remainingBounces = 0;
+        void operator()(const thrust::tuple<PathSegment&, const ShadeableIntersection&>& t) const {
+        PathSegment& ps = thrust::get<0>(t);
+        // Do NOT touch isect.t here; let shadeMaterials handle misses (HDR)
+        if (ps.remainingBounces <= 0) {
+            ps.color = glm::vec3(0.0f);
         }
     }
 };
@@ -34,9 +33,13 @@ struct MarkMissDead {
 struct IsDeadTuple {
     __host__ __device__
         bool operator()(const thrust::tuple<PathSegment, ShadeableIntersection>& t) const {
-        return thrust::get<0>(t).remainingBounces <= 0;
+        const PathSegment& ps = thrust::get<0>(t);
+        // Only remove paths that are already terminated,
+        // NOT those that simply missed this bounce.
+        return ps.remainingBounces <= 0;
     }
 };
+
 
 __device__ float rr_luminance(const glm::vec3& c);
 
