@@ -83,7 +83,8 @@ __device__ float singleTriangleIntersectionTest(
     glm::vec3& intersectionPoint,
     glm::vec3& normal,
     bool& outside,
-    glm::vec2& uv);
+    glm::vec2& uv,
+    glm::vec4& outTangent);
 
 // Mesh Intersection
 __device__ float meshIntersectionTest(
@@ -93,4 +94,5 @@ __device__ float meshIntersectionTest(
     glm::vec3& intersectionPoint,
     glm::vec3& normal,
     bool& outside,
-    glm::vec2& uv);
+    glm::vec2& uv,
+    glm::vec4& tangent);

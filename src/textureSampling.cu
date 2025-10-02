@@ -3,7 +3,6 @@
 __device__ glm::vec3 sampleTexture(const Texture& tex, float u, float v)
 {
     if (!tex.data) return glm::vec3(1.0f);
-
     // Wrap UVs to [0,1]
     u = u - floorf(u);
     v = v - floorf(v);

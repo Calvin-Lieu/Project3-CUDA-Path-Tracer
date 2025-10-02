@@ -4,6 +4,25 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 
+static int remapTex(int idx, size_t textureOffset) {
+    return (idx >= 0) ? int(idx + textureOffset) : -1;
+}
+
+template <int N>
+static void readAccessor(const tinygltf::Model& model, const tinygltf::Accessor& acc, std::vector<float>& out) {
+    const tinygltf::BufferView& bv = model.bufferViews[acc.bufferView];
+    const tinygltf::Buffer& buf = model.buffers[bv.buffer];
+    size_t stride = acc.ByteStride(bv);
+    const unsigned char* src = buf.data.data() + bv.byteOffset + acc.byteOffset;
+
+    out.resize(acc.count * N);
+    for (size_t i = 0; i < acc.count; ++i) {
+        const float* f = reinterpret_cast<const float*>(src + i * stride);
+        for (int k = 0; k < N; ++k) out[i * N + k] = f[k];
+    }
+}
+
+
 // =======================================================
 // Material Loader
 // =======================================================
@@ -104,7 +123,8 @@ void MaterialLoader::loadFromGLTF(const tinygltf::Model& model,
 void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
     std::vector<Material>& materials,
     std::vector<std::pair<std::vector<unsigned char>, Texture>>& textures,
-    size_t textureOffset) {
+    size_t textureOffset)
+{
     // Append textures
     for (const auto& tex : model.textures) {
         const auto& image = model.images[tex.source];
@@ -119,20 +139,94 @@ void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
     // Append materials
     for (const auto& mat : model.materials) {
         Material newMat{};
+
+        // Base color factor
         if (mat.pbrMetallicRoughness.baseColorFactor.size() == 4) {
             newMat.color = glm::vec3(
-                mat.pbrMetallicRoughness.baseColorFactor[0],
-                mat.pbrMetallicRoughness.baseColorFactor[1],
-                mat.pbrMetallicRoughness.baseColorFactor[2]);
+                static_cast<float>(mat.pbrMetallicRoughness.baseColorFactor[0]),
+                static_cast<float>(mat.pbrMetallicRoughness.baseColorFactor[1]),
+                static_cast<float>(mat.pbrMetallicRoughness.baseColorFactor[2]));
+        } else {
+            newMat.color = glm::vec3(1.0f);
         }
-        newMat.metallic = mat.pbrMetallicRoughness.metallicFactor;
-        newMat.roughness = mat.pbrMetallicRoughness.roughnessFactor;
+
+        // PBR factors
+        newMat.metallic = static_cast<float>(mat.pbrMetallicRoughness.metallicFactor);
+        newMat.roughness = static_cast<float>(mat.pbrMetallicRoughness.roughnessFactor);
+
+        // Texture indices
         newMat.baseColorTexture = (mat.pbrMetallicRoughness.baseColorTexture.index >= 0)
-            ? mat.pbrMetallicRoughness.baseColorTexture.index + textureOffset
-            : -1;
+            ? mat.pbrMetallicRoughness.baseColorTexture.index + textureOffset : -1;
+        newMat.metallicRoughnessTexture = (mat.pbrMetallicRoughness.metallicRoughnessTexture.index >= 0)
+            ? mat.pbrMetallicRoughness.metallicRoughnessTexture.index + textureOffset : -1;
+        newMat.normalTexture = (mat.normalTexture.index >= 0)
+            ? mat.normalTexture.index + textureOffset : -1;
+        newMat.emissiveTexture = (mat.emissiveTexture.index >= 0)
+            ? mat.emissiveTexture.index + textureOffset : -1;
+        newMat.occlusionTexture = (mat.occlusionTexture.index >= 0)
+    		? mat.occlusionTexture.index + textureOffset : -1;
+
+        // Occlusion Strength
+        newMat.occlusionStrength = (mat.occlusionTexture.strength > 0.0)
+            ? static_cast<float>(mat.occlusionTexture.strength) : 1.0f;
+
+        // Emissive factor
+        if (mat.emissiveFactor.size() == 3) {
+            newMat.emissiveFactor = glm::vec3(
+                static_cast<float>(mat.emissiveFactor[0]),
+                static_cast<float>(mat.emissiveFactor[1]),
+                static_cast<float>(mat.emissiveFactor[2]));
+            if (glm::length(newMat.emissiveFactor) > 0.0f) {
+                newMat.emittance = 1.0f;
+            }
+        }
+
+        // Alpha handling
+        if (mat.alphaMode == "OPAQUE") {
+            newMat.alphaMode = 0;
+        }
+        else if (mat.alphaMode == "MASK") {
+            newMat.alphaMode = 1;
+            newMat.alphaCutoff = static_cast<float>(mat.alphaCutoff);
+        }
+        else if (mat.alphaMode == "BLEND") {
+            newMat.alphaMode = 2;
+        }
+
+        // Transmission extension (KHR_materials_transmission)
+        if (mat.extensions.count("KHR_materials_transmission")) {
+            const auto& ext = mat.extensions.at("KHR_materials_transmission");
+            if (ext.Has("transmissionFactor"))
+                newMat.transmission = static_cast<float>(ext.Get("transmissionFactor").Get<double>());
+        }
+
+        // Volume extension (KHR_materials_volume)
+        if (mat.extensions.count("KHR_materials_volume")) {
+            const auto& ext = mat.extensions.at("KHR_materials_volume");
+            if (ext.Has("thicknessFactor"))
+                newMat.thickness = static_cast<float>(ext.Get("thicknessFactor").Get<double>());
+            if (ext.Has("attenuationDistance"))
+                newMat.attenuationDistance = static_cast<float>(ext.Get("attenuationDistance").Get<double>());
+            if (ext.Has("attenuationColor") && ext.Get("attenuationColor").ArrayLen() == 3) {
+                newMat.attenuationColor = glm::vec3(
+                    static_cast<float>(ext.Get("attenuationColor").Get(0).Get<double>()),
+                    static_cast<float>(ext.Get("attenuationColor").Get(1).Get<double>()),
+                    static_cast<float>(ext.Get("attenuationColor").Get(2).Get<double>()));
+            }
+        }
+
+        // IOR extension (KHR_materials_ior)
+        if (mat.extensions.count("KHR_materials_ior")) {
+            const auto& ext = mat.extensions.at("KHR_materials_ior");
+            if (ext.Has("ior"))
+                newMat.indexOfRefraction = static_cast<float>(ext.Get("ior").Get<double>());
+        }
+
         materials.push_back(newMat);
     }
 }
+
+
 // =======================================================
 // Geometry Loader (GLTF)
 // =======================================================
@@ -252,46 +346,28 @@ void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
     size_t materialOffset,
     std::vector<Geom>& geoms,
     std::vector<MeshData>& meshes) {
+
     for (const auto& primitive : mesh.primitives) {
         if (primitive.mode != TINYGLTF_MODE_TRIANGLES) continue;
 
-        std::vector<float> vertices, normals, texcoords;
+        std::vector<float> vertices, normals, texcoords, tangents;
         std::vector<unsigned int> indices;
 
         // POSITION
         auto posIt = primitive.attributes.find("POSITION");
         if (posIt != primitive.attributes.end()) {
-            const tinygltf::Accessor& accessor = model.accessors[posIt->second];
-            const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
-            const tinygltf::Buffer& buffer = model.buffers[bufferView.buffer];
-            const float* data = reinterpret_cast<const float*>(
-                &buffer.data[bufferView.byteOffset + accessor.byteOffset]);
-
-            vertices.resize(accessor.count * 3);
-            for (size_t i = 0; i < accessor.count; ++i) {
-                vertices[i * 3 + 0] = data[i * 3 + 0];
-                vertices[i * 3 + 1] = data[i * 3 + 1];
-                vertices[i * 3 + 2] = data[i * 3 + 2];
-            }
+            const tinygltf::Accessor& acc = model.accessors[posIt->second];
+            readAccessor<3>(model, acc, vertices);
         }
 
         // NORMAL
         auto normalIt = primitive.attributes.find("NORMAL");
         if (normalIt != primitive.attributes.end()) {
-            const tinygltf::Accessor& accessor = model.accessors[normalIt->second];
-            const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
-            const tinygltf::Buffer& buffer = model.buffers[bufferView.buffer];
-            const float* data = reinterpret_cast<const float*>(
-                &buffer.data[bufferView.byteOffset + accessor.byteOffset]);
-
-            normals.resize(accessor.count * 3);
-            for (size_t i = 0; i < accessor.count; ++i) {
-                normals[i * 3 + 0] = data[i * 3 + 0];
-                normals[i * 3 + 1] = data[i * 3 + 1];
-                normals[i * 3 + 2] = data[i * 3 + 2];
-            }
+            const tinygltf::Accessor& acc = model.accessors[normalIt->second];
+            readAccessor<3>(model, acc, normals);
         }
         else {
+            // Generate flat normals if missing
             normals.resize(vertices.size());
             for (size_t i = 0; i < vertices.size(); i += 9) {
                 glm::vec3 v0(vertices[i], vertices[i + 1], vertices[i + 2]);
@@ -306,6 +382,37 @@ void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
             }
         }
 
+        // TEXCOORD_0
+        auto texIt = primitive.attributes.find("TEXCOORD_0");
+        if (texIt != primitive.attributes.end()) {
+            const tinygltf::Accessor& acc = model.accessors[texIt->second];
+            readAccessor<2>(model, acc, texcoords);
+        }
+        else {
+            texcoords.resize((vertices.size() / 3) * 2, 0.0f);
+        }
+
+        // TANGENT
+        auto tangentIt = primitive.attributes.find("TANGENT");
+        if (tangentIt != primitive.attributes.end()) {
+            const tinygltf::Accessor& accessor = model.accessors[tangentIt->second];
+            const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
+            const tinygltf::Buffer& buffer = model.buffers[bufferView.buffer];
+            const float* data = reinterpret_cast<const float*>(
+                &buffer.data[bufferView.byteOffset + accessor.byteOffset]);
+
+            tangents.resize(accessor.count * 4);  
+            for (size_t i = 0; i < accessor.count; ++i) {
+                tangents[i * 4 + 0] = data[i * 4 + 0];
+                tangents[i * 4 + 1] = data[i * 4 + 1];
+                tangents[i * 4 + 2] = data[i * 4 + 2];
+                tangents[i * 4 + 3] = data[i * 4 + 3]; 
+            }
+        }
+        else {
+            tangents.resize((vertices.size() / 3) * 4, 0.0f);
+        }
+
         // INDICES
         if (primitive.indices >= 0) {
             const tinygltf::Accessor& accessor = model.accessors[primitive.indices];
@@ -314,39 +421,28 @@ void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
 
             indices.resize(accessor.count);
 
-            if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
-                const unsigned short* data =
-                    reinterpret_cast<const unsigned short*>(&buffer.data[bufferView.byteOffset + accessor.byteOffset]);
-                for (size_t i = 0; i < accessor.count; i++) indices[i] = data[i];
-            }
-            else if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
-                const unsigned int* data =
-                    reinterpret_cast<const unsigned int*>(&buffer.data[bufferView.byteOffset + accessor.byteOffset]);
-                for (size_t i = 0; i < accessor.count; i++) indices[i] = data[i];
-            }
-            else if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
-                const unsigned char* data =
-                    &buffer.data[bufferView.byteOffset + accessor.byteOffset];
-                for (size_t i = 0; i < accessor.count; i++) indices[i] = data[i];
-            }
-        }
+            const unsigned char* src = buffer.data.data() + bufferView.byteOffset + accessor.byteOffset;
 
-        auto texIt = primitive.attributes.find("TEXCOORD_0");
-        if (texIt != primitive.attributes.end()) {
-            const tinygltf::Accessor& accessor = model.accessors[texIt->second];
-            const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
-            const tinygltf::Buffer& buffer = model.buffers[bufferView.buffer];
-            const float* data = reinterpret_cast<const float*>(
-                &buffer.data[bufferView.byteOffset + accessor.byteOffset]);
-
-            texcoords.resize(accessor.count * 2);
-            for (size_t i = 0; i < accessor.count; ++i) {
-                texcoords[i * 2 + 0] = data[i * 2 + 0];
-                texcoords[i * 2 + 1] = data[i * 2 + 1];
+            switch (accessor.componentType) {
+            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT: {
+                const unsigned short* data = reinterpret_cast<const unsigned short*>(src);
+                for (size_t i = 0; i < accessor.count; ++i) indices[i] = data[i];
+                break;
             }
-        }
-        else {
-            texcoords.resize((vertices.size() / 3) * 2, 0.0f);
+            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT: {
+                const unsigned int* data = reinterpret_cast<const unsigned int*>(src);
+                for (size_t i = 0; i < accessor.count; ++i) indices[i] = data[i];
+                break;
+            }
+            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE: {
+                const unsigned char* data = reinterpret_cast<const unsigned char*>(src);
+                for (size_t i = 0; i < accessor.count; ++i) indices[i] = data[i];
+                break;
+            }
+            default:
+                std::cerr << "Unsupported index component type: " << accessor.componentType << std::endl;
+                break;
+            }
         }
 
         // Create geometry
@@ -365,6 +461,7 @@ void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
         meshData.vertices = vertices;
         meshData.normals = normals;
         meshData.texcoords = texcoords;
+        meshData.tangents = tangents;
         meshData.indices = indices;
         meshes.push_back(meshData);
     }

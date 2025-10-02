@@ -1,6 +1,5 @@
 #pragma once
 
-
 #include <cuda_runtime.h>
 
 #include "glm/glm.hpp"
@@ -35,51 +34,63 @@ struct Geom
     glm::mat4 invTranspose;
 
     // For triangle meshes loaded from glTF
-    int meshIndex = -1;  // Index into tinygltf::Model::meshes
+    int meshIndex = -1; 
 };
 
 struct TriangleMeshData {
     float* vertices;        
     float* normals;         
     float* texcoords;
+    float* tangents;
     unsigned int* indices;  
     int triangleCount;    
 };
 
 struct MeshData {
-    std::vector<float> vertices;
-    std::vector<float> normals;
+    std::vector<float> vertices;   
+    std::vector<float> normals;    
     std::vector<float> texcoords; 
+    std::vector<float> tangents; 
     std::vector<unsigned int> indices;
 };
 
 struct Material
 {
-    glm::vec3 color;
+    // Base properties
+    glm::vec3 color = glm::vec3(1.0f);   
     struct
     {
-        float exponent;
-        glm::vec3 color;
+        float exponent = 0.0f;
+        glm::vec3 color = glm::vec3(0.0f);
     } specular;
-    float hasReflective;
-    float hasRefractive;
-    float indexOfRefraction;
-    float emittance;
 
-    float roughness;
-    float metallic;
+    float hasReflective = 0.0f;
+    float hasRefractive = 0.0f;
+    float indexOfRefraction = 1.5f;
+    float emittance = 0.0f;
 
-    // Texture support
-    int baseColorTexture;
-    int metallicRoughnessTexture;
-    int normalTexture;
-    int emissiveTexture;
+    // PBR factors
+    float roughness = 1.0f;          
+    float metallic = 0.0f;        
 
-    float transmission = 1.0f;          // like KHR_materials_transmission
-    float thickness = 0.0f;             // volume thickness
-    float attenuationDistance = 1e6f;   // volume absorption distance
-    glm::vec3 attenuationColor = glm::vec3(1.0f); // absorption tint
+    int baseColorTexture = -1;
+    int metallicRoughnessTexture = -1;
+    int normalTexture = -1;
+    int emissiveTexture = -1; 
+	int occlusionTexture = -1;
+
+    float occlusionStrength = 1.0f;
+    float transmission = 0.0f;        
+    float thickness = 0.0f;           
+    float attenuationDistance = 1e6f;  
+    glm::vec3 attenuationColor = glm::vec3(1.0f);
+
+    glm::vec3 emissiveFactor = glm::vec3(0.0f);
+
+    float alphaCutoff = 0.5f; // default for MASK mode
+    int alphaMode = 0;        // 0=OPAQUE, 1=MASK, 2=BLEND
 };
+
 
 struct Texture {
     unsigned char* data;  // Device pointer to texture data
@@ -136,6 +147,7 @@ struct ShadeableIntersection
   float t;
   glm::vec3 surfaceNormal;
   glm::vec2 uv;
+  glm::vec4 tangent;
   int materialId;
   int geomId;
 };

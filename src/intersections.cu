@@ -129,96 +129,86 @@ __device__ bool intersectAABB(const Ray& ray, const glm::vec3& aabbMin, const gl
     return tNear <= tFar && tFar > 0.0f;
 }
 
-__device__ float singleTriangleIntersectionTest(
-    const Geom& geom,
-    const TriangleMeshData& mesh,
-    int triangleIndex,
-    const Ray& r,
-    glm::vec3& intersectionPoint,
-    glm::vec3& normal,
-    bool& outside,
-    glm::vec2& uv)  // Added UV output parameter
+// Helper: Triangle intersection with barycentric interpolation
+__device__ bool intersectTriangle(
+    const glm::vec3& ro, const glm::vec3& rd,
+    const TriangleMeshData& mesh, int triIdx,
+    float& t_out,
+    glm::vec3& normal_out,
+    glm::vec2& uv_out,
+    glm::vec4& tangent_out)
 {
-    // Transform ray to object space
-    glm::vec3 ro = glm::vec3(geom.inverseTransform * glm::vec4(r.origin, 1.0f));
-    glm::vec3 rd = glm::normalize(glm::vec3(geom.inverseTransform * glm::vec4(r.direction, 0.0f)));
-
     const float EPS = 1e-7f;
 
-    const unsigned int i0 = mesh.indices[triangleIndex * 3 + 0];
-    const unsigned int i1 = mesh.indices[triangleIndex * 3 + 1];
-    const unsigned int i2 = mesh.indices[triangleIndex * 3 + 2];
+    // Triangle indices
+    const unsigned int i0 = mesh.indices[triIdx * 3 + 0];
+    const unsigned int i1 = mesh.indices[triIdx * 3 + 1];
+    const unsigned int i2 = mesh.indices[triIdx * 3 + 2];
 
-    const glm::vec3 v0(mesh.vertices[i0 * 3], mesh.vertices[i0 * 3 + 1], mesh.vertices[i0 * 3 + 2]);
-    const glm::vec3 v1(mesh.vertices[i1 * 3], mesh.vertices[i1 * 3 + 1], mesh.vertices[i1 * 3 + 2]);
-    const glm::vec3 v2(mesh.vertices[i2 * 3], mesh.vertices[i2 * 3 + 1], mesh.vertices[i2 * 3 + 2]);
+    // Positions
+    const glm::vec3 v0(mesh.vertices[i0 * 3 + 0], mesh.vertices[i0 * 3 + 1], mesh.vertices[i0 * 3 + 2]);
+    const glm::vec3 v1(mesh.vertices[i1 * 3 + 0], mesh.vertices[i1 * 3 + 1], mesh.vertices[i1 * 3 + 2]);
+    const glm::vec3 v2(mesh.vertices[i2 * 3 + 0], mesh.vertices[i2 * 3 + 1], mesh.vertices[i2 * 3 + 2]);
 
     // Moller-Trumbore
     const glm::vec3 e1 = v1 - v0;
     const glm::vec3 e2 = v2 - v0;
     const glm::vec3 pvec = glm::cross(rd, e2);
     const float det = glm::dot(e1, pvec);
-
-    if (fabsf(det) < EPS) return -1.0f;
+    if (fabsf(det) < EPS) return false;
 
     const float invDet = 1.0f / det;
     const glm::vec3 tvec = ro - v0;
-    const float u_bary = glm::dot(tvec, pvec) * invDet;
-
-    if (u_bary < 0.0f || u_bary > 1.0f) return -1.0f;
+    const float u = glm::dot(tvec, pvec) * invDet;
+    if (u < 0.0f || u > 1.0f) return false;
 
     const glm::vec3 qvec = glm::cross(tvec, e1);
-    const float v_bary = glm::dot(rd, qvec) * invDet;
-
-    if (v_bary < 0.0f || (u_bary + v_bary) > 1.0f) return -1.0f;
+    const float v = glm::dot(rd, qvec) * invDet;
+    if (v < 0.0f || (u + v) > 1.0f) return false;
 
     const float t = glm::dot(e2, qvec) * invDet;
+    if (t <= EPS) return false;
 
-    if (t <= EPS) return -1.0f;
-
-    const float w_bary = 1.0f - u_bary - v_bary;
+    const float w = 1.0f - u - v;
 
     // Interpolate normals
-    glm::vec3 objNormal;
     if (mesh.normals) {
-        const glm::vec3 n0(mesh.normals[i0 * 3], mesh.normals[i0 * 3 + 1], mesh.normals[i0 * 3 + 2]);
-        const glm::vec3 n1(mesh.normals[i1 * 3], mesh.normals[i1 * 3 + 1], mesh.normals[i1 * 3 + 2]);
-        const glm::vec3 n2(mesh.normals[i2 * 3], mesh.normals[i2 * 3 + 1], mesh.normals[i2 * 3 + 2]);
-        objNormal = glm::normalize(w_bary * n0 + u_bary * n1 + v_bary * n2);
+        glm::vec3 n0(mesh.normals[i0 * 3 + 0], mesh.normals[i0 * 3 + 1], mesh.normals[i0 * 3 + 2]);
+        glm::vec3 n1(mesh.normals[i1 * 3 + 0], mesh.normals[i1 * 3 + 1], mesh.normals[i1 * 3 + 2]);
+        glm::vec3 n2(mesh.normals[i2 * 3 + 0], mesh.normals[i2 * 3 + 1], mesh.normals[i2 * 3 + 2]);
+        normal_out = glm::normalize(w * n0 + u * n1 + v * n2);
     }
     else {
-        objNormal = glm::normalize(glm::cross(e1, e2));
+        normal_out = glm::normalize(glm::cross(e1, e2));
     }
 
     // Interpolate UVs
     if (mesh.texcoords) {
-        const glm::vec2 uv0(mesh.texcoords[i0 * 2], mesh.texcoords[i0 * 2 + 1]);
-        const glm::vec2 uv1(mesh.texcoords[i1 * 2], mesh.texcoords[i1 * 2 + 1]);
-        const glm::vec2 uv2(mesh.texcoords[i2 * 2], mesh.texcoords[i2 * 2 + 1]);
-        uv = w_bary * uv0 + u_bary * uv1 + v_bary * uv2;
-        if (mesh.texcoords && u_bary > 0.0f && v_bary > 0.0f) {
-            uv = w_bary * uv0 + u_bary * uv1 + v_bary * uv2;
-            //// Print ONCE per kernel launch
-            //if (threadIdx.x == 0 && blockIdx.x == 0) {
-            //    printf("Triangle UV computed: (%.3f, %.3f)\n", uv.x, uv.y);
-            //}
-        }
+        glm::vec2 uv0(mesh.texcoords[i0 * 2], mesh.texcoords[i0 * 2 + 1]);
+        glm::vec2 uv1(mesh.texcoords[i1 * 2], mesh.texcoords[i1 * 2 + 1]);
+        glm::vec2 uv2(mesh.texcoords[i2 * 2], mesh.texcoords[i2 * 2 + 1]);
+        uv_out = w * uv0 + u * uv1 + v * uv2;
     }
     else {
-        uv = glm::vec2(0.0f);
+        uv_out = glm::vec2(0.0f);
     }
 
-    // Transform back to world space
-    const glm::vec3 Pobj = ro + rd * t;
-    intersectionPoint = glm::vec3(geom.transform * glm::vec4(Pobj, 1.0f));
-    normal = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(objNormal, 0.0f)));
+    // Interpolate tangents
+    if (mesh.tangents) {
+        glm::vec4 t0(mesh.tangents[i0 * 4 + 0], mesh.tangents[i0 * 4 + 1], mesh.tangents[i0 * 4 + 2], mesh.tangents[i0 * 4 + 3]);
+        glm::vec4 t1(mesh.tangents[i1 * 4 + 0], mesh.tangents[i1 * 4 + 1], mesh.tangents[i1 * 4 + 2], mesh.tangents[i1 * 4 + 3]);
+        glm::vec4 t2(mesh.tangents[i2 * 4 + 0], mesh.tangents[i2 * 4 + 1], mesh.tangents[i2 * 4 + 2], mesh.tangents[i2 * 4 + 3]);
+        tangent_out = glm::normalize(w * t0 + u * t1 + v * t2);
+    }
+    else {
+        tangent_out = glm::vec4(1, 0, 0, 1); // fallback
+    }
 
-    outside = glm::dot(r.direction, normal) < 0.0f;
-    if (!outside) normal = -normal;
-
-    return glm::length(intersectionPoint - r.origin);
+    t_out = t;
+    return true;
 }
 
+// Brute-force mesh intersection
 __device__ float meshIntersectionTest(
     const Geom& geom,
     const TriangleMeshData& mesh,
@@ -226,72 +216,31 @@ __device__ float meshIntersectionTest(
     glm::vec3& intersectionPoint,
     glm::vec3& normal,
     bool& outside,
-    glm::vec2& uv)  // Added UV output parameter
+    glm::vec2& uv,
+    glm::vec4& tangent)
 {
-    // Ray to object space
     const glm::vec3 ro = glm::vec3(geom.inverseTransform * glm::vec4(r.origin, 1.0f));
     const glm::vec3 rd = glm::normalize(glm::vec3(geom.inverseTransform * glm::vec4(r.direction, 0.0f)));
 
-    const float EPS = 1e-7f;
     float tClosest = 1e30f;
     glm::vec3 bestNormal(0.0f);
     glm::vec2 bestUV(0.0f);
+    glm::vec4 bestTangent(1, 0, 0, 1);
     bool hit = false;
 
     for (int i = 0; i < mesh.triangleCount; ++i) {
-        const unsigned int i0 = mesh.indices[i * 3 + 0];
-        const unsigned int i1 = mesh.indices[i * 3 + 1];
-        const unsigned int i2 = mesh.indices[i * 3 + 2];
+        float t_tmp;
+        glm::vec3 n_tmp;
+        glm::vec2 uv_tmp;
+        glm::vec4 tangent_tmp;
 
-        const glm::vec3 v0(mesh.vertices[i0 * 3 + 0], mesh.vertices[i0 * 3 + 1], mesh.vertices[i0 * 3 + 2]);
-        const glm::vec3 v1(mesh.vertices[i1 * 3 + 0], mesh.vertices[i1 * 3 + 1], mesh.vertices[i1 * 3 + 2]);
-        const glm::vec3 v2(mesh.vertices[i2 * 3 + 0], mesh.vertices[i2 * 3 + 1], mesh.vertices[i2 * 3 + 2]);
-
-        const glm::vec3 e1 = v1 - v0;
-        const glm::vec3 e2 = v2 - v0;
-
-        // Moller-Trumbore
-        const glm::vec3 pvec = glm::cross(rd, e2);
-        const float det = glm::dot(e1, pvec);
-        if (fabsf(det) < EPS) continue;
-        const float invDet = 1.0f / det;
-
-        const glm::vec3 tvec = ro - v0;
-        const float u_bary = glm::dot(tvec, pvec) * invDet;
-        if (u_bary < 0.0f || u_bary > 1.0f) continue;
-
-        const glm::vec3 qvec = glm::cross(tvec, e1);
-        const float v_bary = glm::dot(rd, qvec) * invDet;
-        if (v_bary < 0.0f || (u_bary + v_bary) > 1.0f) continue;
-
-        const float t = glm::dot(e2, qvec) * invDet;
-        if (t <= EPS) continue;
-
-        if (t < tClosest) {
-            tClosest = t;
-            hit = true;
-            const float w_bary = 1.0f - u_bary - v_bary;
-
-            // Interpolate normals if available; otherwise face normal
-            if (mesh.normals) {
-                const glm::vec3 n0(mesh.normals[i0 * 3 + 0], mesh.normals[i0 * 3 + 1], mesh.normals[i0 * 3 + 2]);
-                const glm::vec3 n1(mesh.normals[i1 * 3 + 0], mesh.normals[i1 * 3 + 1], mesh.normals[i1 * 3 + 2]);
-                const glm::vec3 n2(mesh.normals[i2 * 3 + 0], mesh.normals[i2 * 3 + 1], mesh.normals[i2 * 3 + 2]);
-                bestNormal = glm::normalize(w_bary * n0 + u_bary * n1 + v_bary * n2);
-            }
-            else {
-                bestNormal = glm::normalize(glm::cross(e1, e2));
-            }
-
-            // Interpolate UVs
-            if (mesh.texcoords) {
-                const glm::vec2 uv0(mesh.texcoords[i0 * 2], mesh.texcoords[i0 * 2 + 1]);
-                const glm::vec2 uv1(mesh.texcoords[i1 * 2], mesh.texcoords[i1 * 2 + 1]);
-                const glm::vec2 uv2(mesh.texcoords[i2 * 2], mesh.texcoords[i2 * 2 + 1]);
-                bestUV = w_bary * uv0 + u_bary * uv1 + v_bary * uv2;
-            }
-            else {
-                bestUV = glm::vec2(0.0f);
+        if (intersectTriangle(ro, rd, mesh, i, t_tmp, n_tmp, uv_tmp, tangent_tmp)) {
+            if (t_tmp < tClosest) {
+                tClosest = t_tmp;
+                bestNormal = n_tmp;
+                bestUV = uv_tmp;
+                bestTangent = tangent_tmp;
+                hit = true;
             }
         }
     }
@@ -302,12 +251,57 @@ __device__ float meshIntersectionTest(
     const glm::vec3 Pobj = ro + rd * tClosest;
     intersectionPoint = glm::vec3(geom.transform * glm::vec4(Pobj, 1.0f));
     normal = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(bestNormal, 0.0f)));
+
+    // Tangent to world
+    glm::vec3 T_world = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(glm::vec3(bestTangent), 0.0f)));
+    T_world = glm::normalize(T_world - normal * glm::dot(normal, T_world));
+    tangent = glm::vec4(T_world, bestTangent.w);
+
     uv = bestUV;
 
-    // Orient and set outside
+    // Orient correctly
     outside = glm::dot(r.direction, normal) < 0.0f;
     if (!outside) normal = -normal;
 
-    // Return world-space distance like your sphere/box tests
+    return glm::length(intersectionPoint - r.origin);
+}
+
+// Single triangle intersection (used in BVH traversal)
+__device__ float singleTriangleIntersectionTest(
+    const Geom& geom,
+    const TriangleMeshData& mesh,
+    int triangleIndex,
+    const Ray& r,
+    glm::vec3& intersectionPoint,
+    glm::vec3& normal,
+    bool& outside,
+    glm::vec2& uv,
+    glm::vec4& tangent)
+{
+    glm::vec3 ro = glm::vec3(geom.inverseTransform * glm::vec4(r.origin, 1.0f));
+    glm::vec3 rd = glm::normalize(glm::vec3(geom.inverseTransform * glm::vec4(r.direction, 0.0f)));
+
+    float t_tmp;
+    glm::vec3 n_tmp;
+    glm::vec2 uv_tmp;
+    glm::vec4 tangent_tmp;
+
+    if (!intersectTriangle(ro, rd, mesh, triangleIndex, t_tmp, n_tmp, uv_tmp, tangent_tmp)) {
+        return -1.0f;
+    }
+
+    const glm::vec3 Pobj = ro + rd * t_tmp;
+    intersectionPoint = glm::vec3(geom.transform * glm::vec4(Pobj, 1.0f));
+    normal = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(n_tmp, 0.0f)));
+
+    glm::vec3 T_world = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(glm::vec3(tangent_tmp), 0.0f)));
+    T_world = glm::normalize(T_world - normal * glm::dot(normal, T_world));
+    tangent = glm::vec4(T_world, tangent_tmp.w);
+
+    uv = uv_tmp;
+
+    outside = glm::dot(r.direction, normal) < 0.0f;
+    if (!outside) normal = -normal;
+
     return glm::length(intersectionPoint - r.origin);
 }

@@ -19,13 +19,13 @@
         "LOOKAT": [ 0.0, 0.3, 0.0 ],
         "UP": [ 0.0, 1.0, 0.0 ]
     },
-    "Objects": [
+    "Objects": [ 
         {
             "TYPE": "gltf",
             "FILE": "../scenes/models/FlightHelmet/gltf/FlightHelmet.gltf",
             "MATERIAL": "default",
             "TRANS": [ 0.0, 0.0, 0.0 ],
-            "ROTAT": [ 0.0, 0.0, 0.0 ],
+            "ROTAT": [ 0.0, 180.0, 0.0 ],
             "SCALE": [ 1.0, 1.0, 1.0 ]
         }
     ]

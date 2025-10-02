@@ -239,6 +239,15 @@ void pathtraceInit(Scene* scene)
             cudaMemcpy(hostMeshes[i].texcoords, hostMesh.texcoords.data(),
                 hostMesh.texcoords.size() * sizeof(float), cudaMemcpyHostToDevice);
 
+            if (!hostMesh.tangents.empty()) {
+                cudaMalloc(&hostMeshes[i].tangents, hostMesh.tangents.size() * sizeof(float));
+                cudaMemcpy(hostMeshes[i].tangents, hostMesh.tangents.data(),
+                    hostMesh.tangents.size() * sizeof(float), cudaMemcpyHostToDevice);
+            }
+            else {
+                hostMeshes[i].tangents = nullptr;
+            }
+
             // Indices
             cudaMalloc(&hostMeshes[i].indices, hostMesh.indices.size() * sizeof(unsigned int));
             cudaMemcpy(hostMeshes[i].indices, hostMesh.indices.data(),
@@ -304,6 +313,7 @@ void pathtraceInit(Scene* scene)
         cudaMemcpy(dev_textures, hostTextures.data(),
             numTextures * sizeof(Texture), cudaMemcpyHostToDevice);
     }
+
 
     if (!hst_scene->environmentMapPath.empty()) {
         std::cout << "Loading environment map: " << hst_scene->environmentMapPath << "\n";
@@ -380,6 +390,7 @@ void pathtraceFree()
         for (int i = 0; i < numMeshes; ++i) {
             if (hostMeshes[i].vertices) cudaFree(hostMeshes[i].vertices);
             if (hostMeshes[i].normals) cudaFree(hostMeshes[i].normals);
+            if (hostMeshes[i].tangents) cudaFree(hostMeshes[i].tangents);
             if (hostMeshes[i].indices) cudaFree(hostMeshes[i].indices);
         }
 
@@ -474,37 +485,43 @@ __global__ void computeIntersections(
     const Ray ray = pathSegments[idx].ray;
 
     float t_min = 1e20f;
-    int   hit_i = -1;
-    glm::vec3 n_best = glm::vec3(0.0f);
-    glm::vec2 uv_best = glm::vec2(0.0f);  // Add UV tracking
+    int hit_i = -1;
+    glm::vec3 n_best(0.0f);
+    glm::vec2 uv_best(0.0f);
+    glm::vec4 tangent_best(0.0f);
 
     glm::vec3 I_tmp, N_tmp;
-    glm::vec2 uv_tmp;  // Add UV temp variable
+    glm::vec2 uv_tmp;
+    glm::vec4 tangent_tmp;
     bool outside;
 
-#pragma unroll 1
-    for (int i = 0; i < geoms_size; ++i)
-    {
+    for (int i = 0; i < geoms_size; ++i) {
         const Geom& g = geoms[i];
         float t = -1.0f;
 
         if (g.type == CUBE) {
             t = boxIntersectionTest(g, ray, I_tmp, N_tmp, outside);
-            uv_tmp = glm::vec2(0.0f);  // Cubes don't have UVs yet
+            uv_tmp = glm::vec2(0.0f);
+            tangent_tmp = glm::vec4(0, 0, 0, 1);
         }
         else if (g.type == SPHERE) {
             t = sphereIntersectionTest(g, ray, I_tmp, N_tmp, outside);
-            uv_tmp = glm::vec2(0.0f);  // Spheres don't have UVs yet
+            uv_tmp = glm::vec2(0.0f);
+            tangent_tmp = glm::vec4(0, 0, 0, 1);
         }
         else if (g.type == TRIANGLE_MESH && g.meshIndex >= 0) {
-            t = meshIntersectionTest(g, meshes[g.meshIndex], ray, I_tmp, N_tmp, outside, uv_tmp);
+            t = meshIntersectionTest(
+                g, meshes[g.meshIndex], ray,
+                I_tmp, N_tmp, outside,
+                uv_tmp, tangent_tmp);
         }
 
         if (t > 0.0f && t < t_min) {
             t_min = t;
             hit_i = i;
             n_best = N_tmp;
-            uv_best = uv_tmp;  // Store UV from closest hit
+            uv_best = uv_tmp;
+            tangent_best = tangent_tmp;
         }
     }
 
@@ -514,10 +531,12 @@ __global__ void computeIntersections(
         out.materialId = geoms[hit_i].materialid;
         out.surfaceNormal = n_best;
         out.geomId = hit_i;
-        out.uv = uv_best;  // Store UV in output
+        out.uv = uv_best;
+        out.tangent = tangent_best;
     }
     intersections[idx] = out;
 }
+
 
 __global__ void computeIntersectionsBVH(
     int depth, int num_paths,
@@ -527,7 +546,7 @@ __global__ void computeIntersectionsBVH(
     const BVHPrimitive* __restrict__ primitives,
     const TriangleMeshData* __restrict__ meshes,
     ShadeableIntersection* __restrict__ intersections)
-{
+{ 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_paths) return;
 
@@ -535,60 +554,66 @@ __global__ void computeIntersectionsBVH(
 
     float t_min = 1e20f;
     int hit_i = -1;
-    glm::vec3 n_best = glm::vec3(0.0f);
+    glm::vec3 n_best(0.0f);
+    glm::vec2 uv_best(0.0f);
+    glm::vec4 tangent_best(0.0f);
 
     glm::vec3 I_tmp, N_tmp;
+    glm::vec2 uv_tmp;
+    glm::vec4 tangent_tmp;
     bool outside;
-    glm::vec2 uv_best;
 
     // Stack for iterative BVH traversal
     int stack[64];
     int stackPtr = 0;
-    stack[stackPtr++] = 0; // Start with root
+    stack[stackPtr++] = 0;
 
     while (stackPtr > 0) {
         int nodeIdx = stack[--stackPtr];
         const BVHNode& node = bvhNodes[nodeIdx];
-        
+
         // Test AABB
-        if (!intersectAABB(ray, node.aabbMin, node.aabbMax))
-            continue;
+        if (!intersectAABB(ray, node.aabbMin, node.aabbMax)) continue;
 
         if (node.leftChild == -1) {
-            // Leaf node - test primitives
+            // Leaf node
             for (int i = 0; i < node.primCount; i++) {
                 const BVHPrimitive& prim = primitives[node.primStart + i];
                 const Geom& g = geoms[prim.geomIndex];
 
                 float t = -1.0f;
-                glm::vec2 uv_tmp;
+
                 if (prim.type == PRIM_GEOM) {
-                    // Test whole geometry (sphere or cube)
                     if (g.type == CUBE) {
                         t = boxIntersectionTest(g, ray, I_tmp, N_tmp, outside);
+                        uv_tmp = glm::vec2(0.0f);
+                        tangent_tmp = glm::vec4(0, 0, 0, 1);
                     }
                     else if (g.type == SPHERE) {
                         t = sphereIntersectionTest(g, ray, I_tmp, N_tmp, outside);
+                        uv_tmp = glm::vec2(0.0f);
+                        tangent_tmp = glm::vec4(0, 0, 0, 1);
                     }
                 }
                 else {
-                    // Test single triangle
-                    t = singleTriangleIntersectionTest(g, meshes[g.meshIndex],
-                        prim.triangleIndex, ray,
-                        I_tmp, N_tmp, outside, uv_tmp);
+                    t = singleTriangleIntersectionTest(
+                        g, meshes[g.meshIndex], prim.triangleIndex, ray,
+                        I_tmp, N_tmp, outside,
+                        uv_tmp, tangent_tmp);
                 }
 
                 if (t > 0.0f && t < t_min) {
                     t_min = t;
                     hit_i = prim.geomIndex;
                     n_best = N_tmp;
-                    uv_best = uv_tmp;  // Store the UV
+                    uv_best = uv_tmp;
+                    tangent_best = tangent_tmp;
                 }
             }
         }
         else {
             // Interior node - add children to stack
-            if (stackPtr < 62) {  // Leave room for both children
+            if (stackPtr < 62) { // Leave room for both children
                 stack[stackPtr++] = node.leftChild;
                 stack[stackPtr++] = node.rightChild;
             }
@@ -602,9 +627,11 @@ __global__ void computeIntersectionsBVH(
         out.surfaceNormal = n_best;
         out.geomId = hit_i;
         out.uv = uv_best;
+        out.tangent = tangent_best;
     }
     intersections[idx] = out;
 }
+
 
 // Per-class shading over contiguous spans
 __global__ void shadeEmissiveRange(
@@ -689,6 +716,20 @@ __global__ void gatherTerminated(int n, glm::vec3* image, PathSegment* paths)
     }
 }
 
+__device__ glm::vec3 debugUVColor(const glm::vec2& uv) {
+    // Wrap to [0,1]
+    float u = uv.x - floorf(uv.x);
+    float v = uv.y - floorf(uv.y);
+
+    return glm::vec3(u, v, 0.0f);
+
+    //int checkU = int(floorf(u * 8)) % 2;
+    //int checkV = int(floorf(v * 8)) % 2;
+    //float c = (checkU ^ checkV) ? 1.0f : 0.0f;
+    //return glm::vec3(c, u, v); 
+    
+}
+
 __global__ void shadeMaterials(
     int iter, int num_paths, int depth, int useRR, int useNEE,
     ShadeableIntersection* __restrict__ isects,
@@ -703,23 +744,16 @@ __global__ void shadeMaterials(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_paths) return;
 
-    if (iter == 1 && idx == 0) {
-        printf("shadeMaterials called: envMap = %p\n", envMap);
-        if (envMap) {
-            printf("  envMap exists on device\n");
-        }
-    }
     const ShadeableIntersection isect = isects[idx];
     PathSegment& ps = paths[idx];
-    if (iter == 1 && idx == 0) {
-        printf("shadeMaterials: envMap pointer = %p\n", envMap);
-        if (envMap) {
-            printf("  envMap.width = %d, height = %d\n", envMap->width, envMap->height);
-            printf("  envMap.totalLuminance = %f\n", envMap->totalLuminance);
-        }
+
+    if (ps.remainingBounces <= 0) {
+        ps.color = glm::vec3(0);
+        return;
     }
-    if (ps.remainingBounces <= 0) { ps.color = glm::vec3(0); return; }
+
     if (isect.t < 0.0f) {
+        // Ray missed - sample environment map
         if (envMap) {
             glm::vec3 envColor = sampleEnvironmentMap(ps.ray.direction, *envMap);
             atomicAddVec3(image, ps.pixelIndex, ps.color * envColor);
@@ -728,76 +762,96 @@ __global__ void shadeMaterials(
         ps.remainingBounces = 0;
         return;
     }
-    
+
     Material m = materials[isect.materialId];
 
-    // Sample base color texture
+    // --- Base color ---
     glm::vec3 albedo = m.color;
     if (textures && m.baseColorTexture >= 0) {
         albedo *= sampleTexture(textures[m.baseColorTexture], isect.uv.x, isect.uv.y);
-        //if (iter == 1 && depth == 1) {
-        //    printf("Tex %d: UV(%.2f,%.2f) -> RGB(%.3f,%.3f,%.3f)\n",
-        //        m.baseColorTexture, isect.uv.x, isect.uv.y,
-        //        albedo.x, albedo.y, albedo.z);
-        //}
     }
-    m.color = albedo;  // Update material with textured color
+    m.color = albedo;
 
+    // --- Metallic-Roughness ---
     if (textures && m.metallicRoughnessTexture >= 0) {
         glm::vec3 mr = sampleTexture(textures[m.metallicRoughnessTexture], isect.uv.x, isect.uv.y);
-        m.metallic *= mr.b;   // Blue channel = metallic
-        m.roughness *= mr.g;  // Green channel = roughness
+        m.metallic *= mr.b;
+        m.roughness *= mr.g;
     }
 
-    if (m.emittance > 0.0f) {
-        glm::vec3 Le = m.color * m.emittance;
-        glm::vec3 contrib;
+    // --- Normal mapping ---
+    glm::vec3 shadingNormal = glm::normalize(isect.surfaceNormal);
+    if (textures && m.normalTexture >= 0) {
+        glm::vec3 nSample = sampleTexture(textures[m.normalTexture], isect.uv.x, isect.uv.y);
+        nSample = glm::normalize(nSample * 2.0f - 1.0f);  // [0,1] -> [-1,1]
 
-        if (useNEE) {
-            // Use MIS when NEE is enabled
-            contrib = evalEmissiveWithMIS(ps, isect, Le, depth, geoms, lightIdx, numLights);
-        }
-        else {
-            // Without NEE, just use path throughput
-            contrib = ps.color * Le;
-        }
+        glm::vec3 T = glm::normalize(glm::vec3(isect.tangent));
+        glm::vec3 N = shadingNormal;
+        glm::vec3 B = glm::normalize(glm::cross(N, T) * isect.tangent.w);
 
+        glm::mat3 TBN(T, B, N);
+        shadingNormal = glm::normalize(TBN * nSample);
+    }
+
+    // --- Occlusion ---
+    float ao = 1.0f;
+    if (textures && m.occlusionTexture >= 0) {
+        glm::vec3 occ = sampleTexture(textures[m.occlusionTexture], isect.uv.x, isect.uv.y);
+        ao = 1.0f + (occ.r - 1.0f) * m.occlusionStrength;
+    }
+    m.color *= ao;
+
+    // --- Emissive (additive) ---
+    glm::vec3 Le_tex(0.0f);
+    if (textures && m.emissiveTexture >= 0) {
+        Le_tex = sampleTexture(textures[m.emissiveTexture], isect.uv.x, isect.uv.y);
+    }
+    glm::vec3 Le_gltf = m.emissiveFactor * Le_tex;
+
+    // Treat glTF emissive as self-emission (no NEE sampling)
+    if (Le_gltf.x > 0.0f || Le_gltf.y > 0.0f || Le_gltf.z > 0.0f) {
+        glm::vec3 contrib = ps.color * Le_gltf;
         atomicAddVec3(image, ps.pixelIndex, contrib);
         ps.color = glm::vec3(0);
         ps.remainingBounces = 0;
         return;
     }
 
-    thrust::default_random_engine rng =
-        makeSeededRandomEngine(iter, paths[idx].pixelIndex, depth);
+    // --- Emissive ---
+    if (m.emittance > 0.0f) {
+        glm::vec3 Le = m.color * m.emittance;
+        glm::vec3 contrib = ps.color * Le;
+        atomicAddVec3(image, ps.pixelIndex, contrib);
+        ps.color = glm::vec3(0);
+        ps.remainingBounces = 0;
+        return;
+    }
+
+    thrust::default_random_engine rng = makeSeededRandomEngine(iter, ps.pixelIndex, depth);
 
     const glm::vec3 P = ps.ray.origin + ps.ray.direction * isect.t;
-    const glm::vec3 N = isect.surfaceNormal;
     const glm::vec3 wo = -ps.ray.direction;
 
+    // NEE for diffuse surfaces
     if (useNEE && numLights > 0 && isDiffuse(m)) {
         const glm::vec3 albedoTimesThroughput = m.color * ps.color;
         addDirectLighting_NEEDiffuse(
-            P, N, wo,
-            materials,
+            P, shadingNormal, wo,
+            materials, 
             geoms, ngeoms,
             lightIdx, numLights,
             albedoTimesThroughput,
-            ps.pixelIndex,
-            image,
-            rng,
+            ps.pixelIndex, 
+            image, 
+            rng, 
             envMap);
     }
 
-    scatterRay(ps, P, N, m, rng);
+    scatterRay(ps, P, shadingNormal, m, rng);
 
     if (useRR) applyRussianRoulette(ps, depth, 3, rng);
-
-    //if (envMap) {
-    //    glm::vec3 envColor = sampleEnvironmentMap(ps.ray.direction, *envMap);
-    //    atomicAddVec3(image, ps.pixelIndex, ps.color * envColor * 1.0f); // small contribution
-    //}
 }
+
 
 // Add the current iteration's output to the overall image
 __global__ void finalGather(int nPaths, glm::vec3* image, PathSegment* iterationPaths)
