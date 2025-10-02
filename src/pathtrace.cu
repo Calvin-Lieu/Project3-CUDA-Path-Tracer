@@ -820,7 +820,16 @@ __global__ void shadeMaterials(
     // --- Emissive ---
     if (m.emittance > 0.0f) {
         glm::vec3 Le = m.color * m.emittance;
-        glm::vec3 contrib = ps.color * Le;
+        glm::vec3 contrib;
+        if (useNEE) {
+            // With NEE: use MIS to balance light sampling vs BRDF sampling
+            contrib = evalEmissiveWithMIS(ps, isect, Le, depth, geoms, lightIdx, numLights);
+        }
+        else {
+            // Without NEE: only BRDF sampling is active, no MIS needed
+            contrib = ps.color * Le;
+        }
+
         atomicAddVec3(image, ps.pixelIndex, contrib);
         ps.color = glm::vec3(0);
         ps.remainingBounces = 0;
@@ -832,18 +841,19 @@ __global__ void shadeMaterials(
     const glm::vec3 P = ps.ray.origin + ps.ray.direction * isect.t;
     const glm::vec3 wo = -ps.ray.direction;
 
+
     // NEE for diffuse surfaces
     if (useNEE && numLights > 0 && isDiffuse(m)) {
-        const glm::vec3 albedoTimesThroughput = m.color * ps.color;
         addDirectLighting_NEEDiffuse(
             P, shadingNormal, wo,
-            materials, 
+            materials,
             geoms, ngeoms,
             lightIdx, numLights,
-            albedoTimesThroughput,
-            ps.pixelIndex, 
-            image, 
-            rng, 
+            m.color,     
+            ps.color,    
+            ps.pixelIndex,
+            image,
+            rng,
             envMap);
     }
 

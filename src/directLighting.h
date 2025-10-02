@@ -36,6 +36,7 @@ __device__ void addDirectLighting_NEEDiffuse(
     const Geom* __restrict__ geoms, int ngeoms,
     const int* __restrict__ lightIdx, int numLights,
     const glm::vec3& albedo,
+    const glm::vec3& throughput,
     int pixelIndex,
     glm::vec3* __restrict__ image,
     thrust::default_random_engine& rng,

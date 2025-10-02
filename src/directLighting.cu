@@ -120,12 +120,13 @@ __device__ void addDirectLighting_NEEDiffuse(
     const Geom* __restrict__ geoms, int ngeoms,
     const int* __restrict__ lightIdx, int numLights,
     const glm::vec3& albedo,
+    const glm::vec3& throughput,
     int pixelIndex,
     glm::vec3* __restrict__ image,
     thrust::default_random_engine& rng,
     const EnvironmentMap* __restrict__ envMap)
 {
-    const glm::vec3 f = lambert_f(albedo);      // constant for diffuse
+    const glm::vec3 f = lambert_f(albedo);
 
     // 1) Emitters in the scene
     if (numLights > 0) {
@@ -134,23 +135,27 @@ __device__ void addDirectLighting_NEEDiffuse(
         const Geom& Lg = geoms[lightIdx[li]];
         const Material& Lm = materials[Lg.materialid];
         if (Lm.emittance > 0.f) {
-            glm::vec3 Pl, Nl; float area = 0.f;
-            if (Lg.type == SPHERE) sampleSphereLight(Lg, rng, Pl, Nl, area);
-            else                   sampleCubeLight(Lg, rng, Pl, Nl, area);
+            glm::vec3 Pl, Nl;
+            float area = 0.f;
+            if (Lg.type == SPHERE)
+                sampleSphereLight(Lg, rng, Pl, Nl, area);
+            else
+                sampleCubeLight(Lg, rng, Pl, Nl, area);
 
             const glm::vec3 wi = glm::normalize(Pl - P);
             const float d2 = glm::length2(Pl - P);
             const float cosS = fmaxf(0.f, glm::dot(N, wi));
             const float cosL = fmaxf(0.f, glm::dot(Nl, -wi));
+
             if (cosS > 0.f && cosL > 0.f) {
                 const float pmfL = 1.f / float(numLights);
                 const float p_l = pmfL * (d2 / (cosL * fmaxf(1e-8f, area)));
-
                 const float p_b = lambert_pdf(N, wi);
+
                 if (p_l > 0.f && p_b > 0.f && visible(P, Pl, N, geoms, ngeoms)) {
                     const glm::vec3 Le = Lm.color * Lm.emittance;
-                    const float w_l = (p_l * p_l) / (p_l * p_l + p_b * p_b); // balance heuristic
-                    const glm::vec3 contrib = f * Le * cosS * (w_l / p_l);
+                    const float w_l = (p_l * p_l) / (p_l * p_l + p_b * p_b);
+                    const glm::vec3 contrib = throughput * f * Le * cosS * (w_l / p_l);
                     atomicAddVec3(image, pixelIndex, contrib);
                 }
             }
@@ -163,17 +168,17 @@ __device__ void addDirectLighting_NEEDiffuse(
         float u1 = u01(rng), u2 = u01(rng);
 
         glm::vec3 wi_env;
-        float     pdf_env = 0.f;
+        float pdf_env = 0.f;
         glm::vec3 Le_env = sampleEnvironmentMapImportance(*envMap, u1, u2, wi_env, pdf_env);
+
         if (pdf_env > 1e-6f) {
             const float cosS = fmaxf(0.f, glm::dot(N, wi_env));
             if (cosS > 0.f) {
                 const glm::vec3 Pl_far = P + wi_env * 1e6f;
                 if (visible(P, Pl_far, N, geoms, ngeoms)) {
                     const float p_b = lambert_pdf(N, wi_env);
-                    // MIS weight between light sampling (env importance) and BRDF sampling
                     const float w_l = (pdf_env * pdf_env) / (pdf_env * pdf_env + p_b * p_b + 1e-16f);
-                    const glm::vec3 contrib = f * Le_env * cosS * (w_l / pdf_env);
+                    const glm::vec3 contrib = throughput * f * Le_env * cosS * (w_l / pdf_env);
                     atomicAddVec3(image, pixelIndex, contrib);
                 }
             }
