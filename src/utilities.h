@@ -24,6 +24,7 @@ public:
     bool UseRussianRoulette = true;
     bool UseDirectLighting = true;
     bool UseBVH = true;
+    bool UseDenoiser = true;
     int ToneMappingMode = 0;
     float Exposure = 0.0f;
     float Gamma = 1.3f;

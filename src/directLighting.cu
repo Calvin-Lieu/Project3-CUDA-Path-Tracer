@@ -1,26 +1,24 @@
+// directLighting.h
 #include "directLighting.h"
 
 #include "environmentSampling.h"
 #include "glm/gtx/norm.hpp"
 #include "interactions.h"
 
-// Lambertian
+// Lambertian BRDF PDF (cosine-weighted hemisphere)
 __device__ float lambert_pdf(const glm::vec3& n, const glm::vec3& wi) {
     float c = fmaxf(0.f, glm::dot(n, wi));
     return c > 0.f ? c / CUDART_PI_F : 0.f;
 }
-__device__ glm::vec3 lambert_f(const glm::vec3& albedo) {
-    return albedo / CUDART_PI_F;
-}
 
-// Atomic add to image
+// Thread-safe color accumulation for image buffer
 __device__ void atomicAddVec3(glm::vec3* img, int pix, const glm::vec3& v) {
     atomicAdd(&img[pix].x, v.x);
     atomicAdd(&img[pix].y, v.y);
     atomicAdd(&img[pix].z, v.z);
 }
 
-// Sample a sphere light
+// Uniform sampling on sphere surface with area computation
 __device__ void sampleSphereLight(const Geom& g,
     thrust::default_random_engine& rng,
     glm::vec3& Pl, glm::vec3& Nl, float& area)
@@ -41,7 +39,7 @@ __device__ void sampleSphereLight(const Geom& g,
     area = 4.f * CUDART_PI_F * rx * rx;
 }
 
-// Sample a cube light
+// Stratified face sampling for box lights
 __device__ void sampleCubeLight(const Geom& g,
     thrust::default_random_engine& rng,
     glm::vec3& Pl, glm::vec3& Nl, float& area)
@@ -50,6 +48,7 @@ __device__ void sampleCubeLight(const Geom& g,
     const glm::vec3 faceU[6] = { {0,1,0},{0,1,0},{1,0,0},{1,0,0},{1,0,0},{1,0,0} };
     const glm::vec3 faceV[6] = { {0,0,1},{0,0,1},{0,0,1},{0,0,1},{0,1,0},{0,1,0} };
 
+    // Compute face areas and pick proportionally
     float areas[6]; float sumA = 0.f;
     for (int f = 0; f < 6; ++f) {
         glm::vec3 U = glm::vec3(g.transform * glm::vec4(0.5f * faceU[f], 0.0f));
@@ -72,7 +71,7 @@ __device__ void sampleCubeLight(const Geom& g,
     area = sumA;
 }
 
-
+// Shadow ray test with adaptive epsilon based on distance
 __device__ bool visible(const glm::vec3& P, const glm::vec3& Q,
     const glm::vec3& N,
     const Geom* geoms, int ngeoms)
@@ -83,11 +82,10 @@ __device__ bool visible(const glm::vec3& P, const glm::vec3& Q,
 
     glm::vec3 dir = d / maxT;
 
-    // Offset proportional to distance - scales with scene
+    // Adaptive offset to prevent self-intersection
     float offsetEpsilon = maxT * 1e-4f;
     glm::vec3 O = P + N * offsetEpsilon;
 
-    // Recalculate distance from offset origin
     float adjustedMaxT = glm::length(Q - O);
 
     glm::vec3 I_tmp, N_tmp;
@@ -105,7 +103,7 @@ __device__ bool visible(const glm::vec3& P, const glm::vec3& Q,
         else if (g.type == SPHERE)
             t = sphereIntersectionTest(g, r, I_tmp, N_tmp, outside);
 
-        // Accept hits with relative tolerance
+        // Tolerance factor prevents numerical precision issues
         if (t > 0.0f && t < adjustedMaxT * 0.999f) {
             return false;
         }
@@ -113,6 +111,7 @@ __device__ bool visible(const glm::vec3& P, const glm::vec3& Q,
     return true;
 }
 
+// Next Event Estimation with MIS for both area lights and environment
 __device__ void addDirectLightingNEE(
     const glm::vec3& P,
     const glm::vec3& N,
@@ -127,14 +126,14 @@ __device__ void addDirectLightingNEE(
     thrust::default_random_engine& rng,
     const EnvironmentMap* __restrict__ envMap)
 {
-    // --- Diffuse BRDF ---
+    // Diffuse component
     const glm::vec3 f_diff = albedoTimesThroughput / CUDART_PI_F;
 
-    // --- Specular F0 ---
+    // Specular F0 for metals vs dielectrics
     glm::vec3 F0 = glm::mix(glm::vec3(0.04f), albedoTimesThroughput, metallic);
     float alpha = roughness * roughness;
 
-    // 1) Sample an emissive light (area lights)
+    // Sample one area light uniformly
     if (numLights > 0) {
         thrust::uniform_int_distribution<int> pick(0, numLights - 1);
         const int li = pick(rng);
@@ -151,7 +150,7 @@ __device__ void addDirectLightingNEE(
             float cosL = fmaxf(0.f, glm::dot(Nl, -wi));
 
             if (cosS > 0.f && cosL > 0.f && visible(P, Pl, N, geoms, ngeoms)) {
-                // Microfacet specular eval
+                // Evaluate microfacet BRDF
                 glm::vec3 H = glm::normalize(wi + wo);
                 float NoV = fmaxf(0.f, glm::dot(N, wo));
                 float NoL = fmaxf(0.f, glm::dot(N, wi));
@@ -170,6 +169,7 @@ __device__ void addDirectLightingNEE(
                 float p_l = pmfL * (d2 / (cosL * fmaxf(1e-8f, area)));
                 float p_b = lambert_pdf(N, wi);
 
+                // Balance heuristic MIS weight
                 if (p_l > 0.f && p_b > 0.f) {
                     float w_l = (p_l * p_l) / (p_l * p_l + p_b * p_b);
                     glm::vec3 contrib = f * Le * cosS * (w_l / p_l);
@@ -179,7 +179,7 @@ __device__ void addDirectLightingNEE(
         }
     }
 
-    // 2) Environment map sampling
+    // Importance sample environment map
     if (envMap) {
         thrust::uniform_real_distribution<float> u01(0.f, 1.f);
         float u1 = u01(rng), u2 = u01(rng);
@@ -213,22 +213,7 @@ __device__ void addDirectLightingNEE(
     }
 }
 
-__device__ float computeLightPdf(
-    const glm::vec3& P,
-    const glm::vec3& lightP,
-    const glm::vec3& lightN,
-    float lightArea,
-    int numLights)
-{
-    const glm::vec3 wi = lightP - P;
-    const float d2 = glm::length2(wi);
-    const float cosL = fmaxf(0.f, glm::dot(lightN, -glm::normalize(wi)));
-    if (cosL <= 0.f) return 0.f;
-
-    const float pmfLight = 1.f / float(numLights);
-    return pmfLight * (d2 / (cosL * fmaxf(1e-8f, lightArea)));
-}
-
+// MIS weight for emissive surfaces hit via BRDF sampling
 __device__ glm::vec3 evalEmissiveWithMIS(
     const PathSegment& path,
     const ShadeableIntersection& isect,
@@ -238,18 +223,15 @@ __device__ glm::vec3 evalEmissiveWithMIS(
     const int* lightIdx,
     int numLights)
 {
-    // First bounce or no previous BSDF sample: no MIS
-    /*if (depth == 1 || path.prevBsdfPdf <= 0.0f) {
-        return path.color * Le;
-    }*/
-
+    // Skip MIS on first bounce, delta surfaces, or invalid BSDF samples
     if (depth == 1 || path.prevWasDelta || path.prevBsdfPdf <= 0.0f)
     {
         return path.color * Le;
     }
+
     const int hitGeomIdx = isect.geomId;
-    
-    // Find light in list
+
+    // Check if hit geometry is in light list
     int lightListIdx = -1;
     for (int j = 0; j < numLights; ++j) {
         if (lightIdx[j] == hitGeomIdx) {
@@ -257,34 +239,36 @@ __device__ glm::vec3 evalEmissiveWithMIS(
             break;
         }
     }
-    
+
     if (lightListIdx < 0) return path.color * Le;
-    
-    // Compute light area
+
+    // Calculate light surface area
     const Geom& lightGeom = geoms[hitGeomIdx];
     float lightArea;
     if (lightGeom.type == SPHERE) {
         float r = glm::length(glm::vec3(lightGeom.transform * glm::vec4(0.5f, 0, 0, 0)));
         lightArea = 4.f * CUDART_PI_F * fmaxf(r, 0.5f) * fmaxf(r, 0.5f);
-    } else {
+    }
+    else {
         glm::vec3 U = glm::vec3(lightGeom.transform * glm::vec4(0.5f, 0, 0, 0));
         glm::vec3 V = glm::vec3(lightGeom.transform * glm::vec4(0, 0.5f, 0, 0));
         glm::vec3 W = glm::vec3(lightGeom.transform * glm::vec4(0, 0, 0.5f, 0));
-        lightArea = 2.f * (4.f * glm::length(glm::cross(V, W)) + 
-                          4.f * glm::length(glm::cross(U, W)) + 
-                          4.f * glm::length(glm::cross(U, V)));
+        lightArea = 2.f * (4.f * glm::length(glm::cross(V, W)) +
+            4.f * glm::length(glm::cross(U, W)) +
+            4.f * glm::length(glm::cross(U, V)));
     }
-    
-    // Compute light PDF
+
+    // Convert to solid angle PDF
     float d2 = isect.t * isect.t;
     float cosL = fmaxf(0.f, glm::dot(isect.surfaceNormal, -glm::normalize(path.ray.direction)));
-    float p_l = (cosL > 0.f && lightArea > 0.f) 
-        ? (1.f / float(numLights)) * (d2 / (cosL * lightArea)) 
+    float p_l = (cosL > 0.f && lightArea > 0.f)
+        ? (1.f / float(numLights)) * (d2 / (cosL * lightArea))
         : 0.f;
-    
+
+    // Balance heuristic between BRDF and light sampling
     float p_b = path.prevBsdfPdf;
-    float w_b = (p_l > 0.f && p_b > 0.f) 
-        ? (p_b * p_b) / (p_b * p_b + p_l * p_l) 
+    float w_b = (p_l > 0.f && p_b > 0.f)
+        ? (p_b * p_b) / (p_b * p_b + p_l * p_l)
         : 1.0f;
     return path.color * Le * w_b;
 }

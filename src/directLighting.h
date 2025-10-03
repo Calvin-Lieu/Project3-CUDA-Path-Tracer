@@ -8,8 +8,7 @@
 #include "intersections.h"
 
 // Lambertian helpers
-__device__ float     lambert_pdf(const glm::vec3& n, const glm::vec3& wi);
-__device__ glm::vec3 lambert_f(const glm::vec3& albedo);
+__device__ float lambert_pdf(const glm::vec3& n, const glm::vec3& wi);
 
 // Atomic accumulate to image
 __device__ void atomicAddVec3(glm::vec3* img, int pix, const glm::vec3& v);
@@ -27,6 +26,7 @@ __device__ void sampleCubeLight(const Geom& g,
 __device__ bool visible(const glm::vec3& P, const glm::vec3& Q,
     const glm::vec3& N, const Geom* geoms, int ngeoms);
 
+// NEE direct lighting
 __device__ void addDirectLightingNEE(
     const glm::vec3& P,
     const glm::vec3& N,
@@ -41,13 +41,7 @@ __device__ void addDirectLightingNEE(
     thrust::default_random_engine& rng,
     const EnvironmentMap* __restrict__ envMap);
 
-__device__ float computeLightPdf(
-    const glm::vec3& P,
-    const glm::vec3& lightP,
-    const glm::vec3& lightN,
-    float lightArea,
-    int numLights);
-
+// Emissive material evaluation with MIS
 __device__ glm::vec3 evalEmissiveWithMIS(
     const PathSegment& path,
     const ShadeableIntersection& isect,

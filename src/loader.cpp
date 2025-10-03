@@ -4,10 +4,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 
-static int remapTex(int idx, size_t textureOffset) {
-    return (idx >= 0) ? int(idx + textureOffset) : -1;
-}
-
+// Debug print for material properties
 void printMaterial(const Material& m, const std::string& name, int idx) {
     std::cout << "Material[" << idx << "] " << name << "\n";
     std::cout << "  BaseColor: (" << m.color.r << ", "
@@ -58,8 +55,7 @@ void printMaterial(const Material& m, const std::string& name, int idx) {
     std::cout << std::endl;
 }
 
-
-
+// Generic accessor reader for glTF buffer data
 template <int N>
 static void readAccessor(const tinygltf::Model& model, const tinygltf::Accessor& acc, std::vector<float>& out) {
     const tinygltf::BufferView& bv = model.bufferViews[acc.bufferView];
@@ -74,10 +70,11 @@ static void readAccessor(const tinygltf::Model& model, const tinygltf::Accessor&
     }
 }
 
-
 // =======================================================
 // Material Loader
 // =======================================================
+
+// Load materials from custom JSON scene format
 void MaterialLoader::loadFromJSON(const json& materialsData,
     std::vector<Material>& materials,
     std::unordered_map<std::string, uint32_t>& MatNameToID) {
@@ -135,9 +132,11 @@ void MaterialLoader::loadFromJSON(const json& materialsData,
     }
 }
 
+// Initial glTF load with default material
 void MaterialLoader::loadFromGLTF(const tinygltf::Model& model,
     std::vector<Material>& materials,
     std::vector<std::pair<std::vector<unsigned char>, Texture>>& textures) {
+
     // Load textures
     for (const auto& tex : model.textures) {
         const auto& image = model.images[tex.source];
@@ -156,7 +155,7 @@ void MaterialLoader::loadFromGLTF(const tinygltf::Model& model,
     defaultMat.roughness = 0.5f;
     materials.push_back(defaultMat);
 
-    // Load glTF materials
+    // Load materials
     for (const auto& mat : model.materials) {
         Material newMat{};
         if (mat.pbrMetallicRoughness.baseColorFactor.size() == 4) {
@@ -172,6 +171,7 @@ void MaterialLoader::loadFromGLTF(const tinygltf::Model& model,
     }
 }
 
+// Append materials from glTF with proper texture offset
 void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
     std::vector<Material>& materials,
     std::vector<std::pair<std::vector<unsigned char>, Texture>>& textures,
@@ -196,17 +196,18 @@ void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
     for (const auto& mat : model.materials) {
         Material newMat{};
 
-        // Base color factor
+        // Base color
         if (mat.pbrMetallicRoughness.baseColorFactor.size() == 4) {
             newMat.color = glm::vec3(
                 static_cast<float>(mat.pbrMetallicRoughness.baseColorFactor[0]),
                 static_cast<float>(mat.pbrMetallicRoughness.baseColorFactor[1]),
                 static_cast<float>(mat.pbrMetallicRoughness.baseColorFactor[2]));
-        } else {
+        }
+        else {
             newMat.color = glm::vec3(1.0f);
         }
 
-        // PBR factors
+        // PBR parameters
         newMat.metallic = mat.pbrMetallicRoughness.metallicFactor >= 0.0
             ? static_cast<float>(mat.pbrMetallicRoughness.metallicFactor)
             : 1.0f;
@@ -217,7 +218,7 @@ void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
         newMat.metallic = glm::clamp(newMat.metallic, 0.0f, 1.0f);
         newMat.roughness = glm::clamp(newMat.roughness, 0.04f, 1.0f);
 
-        // Texture indices
+        // Remap texture indices with offset
         newMat.baseColorTexture = (mat.pbrMetallicRoughness.baseColorTexture.index >= 0)
             ? mat.pbrMetallicRoughness.baseColorTexture.index + textureOffset : -1;
         newMat.metallicRoughnessTexture = (mat.pbrMetallicRoughness.metallicRoughnessTexture.index >= 0)
@@ -227,13 +228,12 @@ void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
         newMat.emissiveTexture = (mat.emissiveTexture.index >= 0)
             ? mat.emissiveTexture.index + textureOffset : -1;
         newMat.occlusionTexture = (mat.occlusionTexture.index >= 0)
-    		? mat.occlusionTexture.index + textureOffset : -1;
+            ? mat.occlusionTexture.index + textureOffset : -1;
 
-        // Occlusion Strength
         newMat.occlusionStrength = (mat.occlusionTexture.strength > 0.0)
             ? static_cast<float>(mat.occlusionTexture.strength) : 1.0f;
 
-        // Emissive factor
+        // Emissive
         if (mat.emissiveFactor.size() == 3) {
             newMat.emissiveFactor = glm::vec3(
                 static_cast<float>(mat.emissiveFactor[0]),
@@ -244,7 +244,7 @@ void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
             }
         }
 
-        // Alpha handling
+        // Alpha blending modes
         if (mat.alphaMode == "OPAQUE") {
             newMat.alphaMode = 0;
         }
@@ -256,14 +256,13 @@ void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
             newMat.alphaMode = 2;
         }
 
-        // Transmission extension (KHR_materials_transmission)
+        // Parse glTF extensions for advanced materials
         if (mat.extensions.count("KHR_materials_transmission")) {
             const auto& ext = mat.extensions.at("KHR_materials_transmission");
             if (ext.Has("transmissionFactor"))
                 newMat.transmission = static_cast<float>(ext.Get("transmissionFactor").Get<double>());
         }
 
-        // Volume extension (KHR_materials_volume)
         if (mat.extensions.count("KHR_materials_volume")) {
             const auto& ext = mat.extensions.at("KHR_materials_volume");
             if (ext.Has("thicknessFactor"))
@@ -278,13 +277,13 @@ void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
             }
         }
 
-        // IOR extension (KHR_materials_ior)
         if (mat.extensions.count("KHR_materials_ior")) {
             const auto& ext = mat.extensions.at("KHR_materials_ior");
             if (ext.Has("ior"))
                 newMat.indexOfRefraction = static_cast<float>(ext.Get("ior").Get<double>());
         }
 
+        // Classify material type based on properties
         if (newMat.transmission > 0.01f || newMat.alphaMode == 2) {
             newMat.hasRefractive = 1.0f;
             newMat.hasReflective = 0.0f;
@@ -297,17 +296,55 @@ void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
             bool glossy = (newMat.metallic > 0.02f) || (newMat.roughness < 0.95f);
             newMat.hasReflective = glossy ? 1.0f : 0.0f;
         }
-    	int idx = static_cast<int>(materials.size());
+
+        int idx = static_cast<int>(materials.size());
         materials.push_back(newMat);
-        printMaterial(materials.back(), mat.name, idx);
+        //printMaterial(materials.back(), mat.name, idx);
     }
 }
 
+// =======================================================
+// glTF Loader
+// =======================================================
+
+// Top-level glTF file loader
+void GltfLoader::loadFile(const std::string& gltfPath,
+    std::vector<Geom>& geoms,
+    std::vector<MeshData>& meshes,
+    std::vector<Material>& materials,
+    std::vector<std::pair<std::vector<unsigned char>, Texture>>& textures,
+    const glm::mat4& baseTransform)
+{
+    tinygltf::Model model;
+    tinygltf::TinyGLTF loader;
+    std::string err, warn;
+
+    if (!loader.LoadASCIIFromFile(&model, &err, &warn, gltfPath)) {
+        std::cerr << "Failed to load glTF: " << err << std::endl;
+        return;
+    }
+
+    // Append materials with proper indexing
+    size_t textureOffset = textures.size();
+    size_t materialOffset = materials.size();
+    MaterialLoader::appendFromGLTF(model, materials, textures,
+        textureOffset);
+
+    // Traverse scene graph
+    const tinygltf::Scene& scene = model.scenes[model.defaultScene];
+    for (int nodeIndex : scene.nodes) {
+        GeometryLoader::processGLTFNode(model, nodeIndex,
+            baseTransform,
+            geoms, meshes,
+            materialOffset);
+    }
+}
 
 // =======================================================
-// Geometry Loader (GLTF)
+// Geometry Loader
 // =======================================================
 
+// Load geometry from custom JSON scene format
 void GeometryLoader::loadFromJSON(const json& objectsData,
     std::vector<Geom>& geoms,
     std::vector<MeshData>& meshes,
@@ -318,8 +355,8 @@ void GeometryLoader::loadFromJSON(const json& objectsData,
     for (const auto& p : objectsData) {
         const auto& type = p["TYPE"];
 
+        // Handle embedded glTF file references
         if (type == "gltf") {
-            // Load GLTF file specified
             std::string gltfFile = p["FILE"];
             const auto& trans = p["TRANS"];
             const auto& rotat = p["ROTAT"];
@@ -332,11 +369,11 @@ void GeometryLoader::loadFromJSON(const json& objectsData,
             glm::mat4 transform = utilityCore::buildTransformationMatrix(
                 translation, rotation, scaleVec);
 
-            // Reuse existing loader for GLTF into scene
             GltfLoader::loadFile(gltfFile, geoms, meshes, materials, textures, transform);
             continue;
         }
 
+        // Load primitive geometry
         Geom newGeom;
         if (type == "cube") newGeom.type = CUBE;
         else newGeom.type = SPHERE;
@@ -359,6 +396,7 @@ void GeometryLoader::loadFromJSON(const json& objectsData,
     }
 }
 
+// Recursively process glTF scene graph
 void GeometryLoader::processGLTFNode(const tinygltf::Model& model,
     int nodeIndex,
     const glm::mat4& parentTransform,
@@ -369,6 +407,7 @@ void GeometryLoader::processGLTFNode(const tinygltf::Model& model,
 
     glm::mat4 nodeTransform = parentTransform;
 
+    // Handle node transform (matrix or TRS)
     if (node.matrix.size() == 16) {
         glm::mat4 m;
         for (int i = 0; i < 4; ++i) {
@@ -404,24 +443,28 @@ void GeometryLoader::processGLTFNode(const tinygltf::Model& model,
         glm::mat4 R = glm::mat4_cast(rotation);
         glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
         nodeTransform = parentTransform * T * R * S;
-        if (node.translation.size() == 3) {
-            translation = glm::vec3(node.translation[0], node.translation[1], node.translation[2]);
-            std::cout << "Node translation: " << translation.x << ", " << translation.y << ", " << translation.z << "\n";
-        }
+
+        // Debug output for node translation
+        //if (node.translation.size() == 3) {
+        //    translation = glm::vec3(node.translation[0], node.translation[1], node.translation[2]);
+        //    std::cout << "Node translation: " << translation.x << ", " << translation.y << ", " << translation.z << "\n";
+        //}
     }
 
-
+    // Process mesh attached to this node
     if (node.mesh >= 0) {
         processGLTFMesh(model, model.meshes[node.mesh],
             nodeTransform, materialOffset, geoms, meshes);
     }
 
+    // Recurse into children
     for (int childIndex : node.children) {
         processGLTFNode(model, childIndex, nodeTransform,
             geoms, meshes, materialOffset);
     }
 }
 
+// Extract mesh primitives from glTF
 void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
     const tinygltf::Mesh& mesh,
     const glm::mat4& transform,
@@ -435,21 +478,21 @@ void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
         std::vector<float> vertices, normals, texcoords, tangents;
         std::vector<unsigned int> indices;
 
-        // POSITION
+        // Load vertex positions
         auto posIt = primitive.attributes.find("POSITION");
         if (posIt != primitive.attributes.end()) {
             const tinygltf::Accessor& acc = model.accessors[posIt->second];
             readAccessor<3>(model, acc, vertices);
         }
 
-        // NORMAL
+        // Load or generate normals
         auto normalIt = primitive.attributes.find("NORMAL");
         if (normalIt != primitive.attributes.end()) {
             const tinygltf::Accessor& acc = model.accessors[normalIt->second];
             readAccessor<3>(model, acc, normals);
         }
         else {
-            // Generate flat normals if missing
+            // Flat shading fallback
             normals.resize(vertices.size());
             for (size_t i = 0; i < vertices.size(); i += 9) {
                 glm::vec3 v0(vertices[i], vertices[i + 1], vertices[i + 2]);
@@ -464,7 +507,7 @@ void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
             }
         }
 
-        // TEXCOORD_0
+        // Load texture coordinates
         auto texIt = primitive.attributes.find("TEXCOORD_0");
         if (texIt != primitive.attributes.end()) {
             const tinygltf::Accessor& acc = model.accessors[texIt->second];
@@ -474,7 +517,7 @@ void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
             texcoords.resize((vertices.size() / 3) * 2, 0.0f);
         }
 
-        // TANGENT
+        // Load tangents for normal mapping
         auto tangentIt = primitive.attributes.find("TANGENT");
         if (tangentIt != primitive.attributes.end()) {
             const tinygltf::Accessor& accessor = model.accessors[tangentIt->second];
@@ -483,19 +526,19 @@ void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
             const float* data = reinterpret_cast<const float*>(
                 &buffer.data[bufferView.byteOffset + accessor.byteOffset]);
 
-            tangents.resize(accessor.count * 4);  
+            tangents.resize(accessor.count * 4);
             for (size_t i = 0; i < accessor.count; ++i) {
                 tangents[i * 4 + 0] = data[i * 4 + 0];
                 tangents[i * 4 + 1] = data[i * 4 + 1];
                 tangents[i * 4 + 2] = data[i * 4 + 2];
-                tangents[i * 4 + 3] = data[i * 4 + 3]; 
+                tangents[i * 4 + 3] = data[i * 4 + 3];
             }
         }
         else {
             tangents.resize((vertices.size() / 3) * 4, 0.0f);
         }
 
-        // INDICES
+        // Load indices (handle different data types)
         if (primitive.indices >= 0) {
             const tinygltf::Accessor& accessor = model.accessors[primitive.indices];
             const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
@@ -527,7 +570,7 @@ void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
             }
         }
 
-        // Create geometry
+        // Create geometry entry
         Geom newGeom;
         newGeom.type = TRIANGLE_MESH;
         newGeom.materialid = (primitive.material >= 0)
@@ -538,7 +581,7 @@ void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
         newGeom.invTranspose = glm::inverseTranspose(transform);
         geoms.push_back(newGeom);
 
-        // Store mesh
+        // Store mesh data
         MeshData meshData;
         meshData.vertices = vertices;
         meshData.normals = normals;
@@ -549,10 +592,10 @@ void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
     }
 }
 
-
 // =======================================================
 // Camera Loader
 // =======================================================
+
 void CameraLoader::loadFromJSON(const json& cameraData,
     Camera& camera,
     RenderState& state) {
@@ -569,6 +612,7 @@ void CameraLoader::loadFromJSON(const json& cameraData,
     camera.lookAt = glm::vec3(lookat[0], lookat[1], lookat[2]);
     camera.up = glm::vec3(up[0], up[1], up[2]);
 
+    // Compute FOV and camera basis
     float yscaled = tan(fovy * (PI / 180));
     float xscaled = (yscaled * camera.resolution.x) / camera.resolution.y;
     float fovx = (atan(xscaled) * 180) / PI;
@@ -613,6 +657,7 @@ void CameraLoader::setDefault(Camera& camera, RenderState& state) {
 // =======================================================
 // Environment Loader
 // =======================================================
+
 void EnvironmentLoader::loadFromJSON(const json& backgroundData,
     std::string& environmentMapPath) {
     if (backgroundData["TYPE"] == "skybox" && backgroundData.contains("PATH")) {
@@ -620,40 +665,3 @@ void EnvironmentLoader::loadFromJSON(const json& backgroundData,
         std::cout << "Environment map path set to: " << environmentMapPath << "\n";
     }
 }
-
-// =======================================================
-// Gltf Loader
-// =======================================================
-void GltfLoader::loadFile(const std::string& gltfPath,
-    std::vector<Geom>& geoms,
-    std::vector<MeshData>& meshes,
-    std::vector<Material>& materials,
-    std::vector<std::pair<std::vector<unsigned char>, Texture>>& textures,
-    const glm::mat4& baseTransform)
-{
-    tinygltf::Model model;
-    tinygltf::TinyGLTF loader;
-    std::string err, warn;
-
-    if (!loader.LoadASCIIFromFile(&model, &err, &warn, gltfPath)) {
-        std::cerr << "Failed to load glTF: " << err << std::endl;
-        return;
-    }
-
-    // Append materials + textures
-    size_t textureOffset = textures.size();
-    size_t materialOffset = materials.size();
-    MaterialLoader::appendFromGLTF(model, materials, textures,
-        textureOffset);
-
-    // Process scene nodes
-    const tinygltf::Scene& scene = model.scenes[model.defaultScene];
-    for (int nodeIndex : scene.nodes) {
-        GeometryLoader::processGLTFNode(model, nodeIndex,
-            baseTransform,
-            geoms, meshes,
-            materialOffset);
-    }
-}
-
-

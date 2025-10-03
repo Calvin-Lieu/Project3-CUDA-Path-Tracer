@@ -87,13 +87,13 @@ struct Material
 
     glm::vec3 emissiveFactor = glm::vec3(0.0f);
 
-    float alphaCutoff = 0.5f; // default for MASK mode
-    int alphaMode = 0;        // 0=OPAQUE, 1=MASK, 2=BLEND
+    float alphaCutoff = 0.5f;
+    int alphaMode = 0;
 };
 
 
 struct Texture {
-    unsigned char* data;  // Device pointer to texture data
+    unsigned char* data;
     int width;
     int height;
     int channels;

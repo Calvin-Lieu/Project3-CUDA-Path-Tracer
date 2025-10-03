@@ -20,10 +20,10 @@ struct BVHPrimitive {
 struct BVHNode {
     glm::vec3 aabbMin;
     glm::vec3 aabbMax;
-    int leftChild;   // index of left child, or -1 if leaf
-    int rightChild;  // index of right child
-    int primStart;   // first primitive index (for leaves)
-    int primCount;   // number of primitives (for leaves)
+    int leftChild;   // Index of left child, or -1 if leaf
+    int rightChild;  // Index of right child
+    int primStart;   // First primitive index (for leaves)
+    int primCount;   // Number of primitives (for leaves)
 };
 
 struct BVH {

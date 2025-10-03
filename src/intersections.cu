@@ -2,25 +2,28 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/intersect.hpp>
 
+// AABB intersection using slab method
 __host__ __device__ float boxIntersectionTest(
     Geom box,
     Ray r,
-    glm::vec3 &intersectionPoint,
-    glm::vec3 &normal,
-    bool &outside)
+    glm::vec3& intersectionPoint,
+    glm::vec3& normal,
+    bool& outside)
 {
+    // Transform ray into object space
     Ray q;
-    q.origin    =                multiplyMV(box.inverseTransform, glm::vec4(r.origin   , 1.0f));
+    q.origin = multiplyMV(box.inverseTransform, glm::vec4(r.origin, 1.0f));
     q.direction = glm::normalize(multiplyMV(box.inverseTransform, glm::vec4(r.direction, 0.0f)));
 
     float tmin = -1e38f;
     float tmax = 1e38f;
     glm::vec3 tmin_n;
     glm::vec3 tmax_n;
+
+    // Test each axis slab
     for (int xyz = 0; xyz < 3; ++xyz)
     {
         float qdxyz = q.direction[xyz];
-        /*if (glm::abs(qdxyz) > 0.00001f)*/
         {
             float t1 = (-0.5f - q.origin[xyz]) / qdxyz;
             float t2 = (+0.5f - q.origin[xyz]) / qdxyz;
@@ -58,6 +61,7 @@ __host__ __device__ float boxIntersectionTest(
     return -1;
 }
 
+// Analytic sphere intersection
 __host__ __device__ float sphereIntersectionTest(
     Geom sphere,
     Ray r,
@@ -65,56 +69,48 @@ __host__ __device__ float sphereIntersectionTest(
     glm::vec3& normal,
     bool& outside)
 {
-    // Define the sphere radius
     constexpr float radius = 0.5f;
 
-    // Transform ray into object space
+    // Transform to object space
     glm::vec3 ro = multiplyMV(sphere.inverseTransform, glm::vec4(r.origin, 1.0f));
     glm::vec3 rd = glm::normalize(multiplyMV(sphere.inverseTransform, glm::vec4(r.direction, 0.0f)));
 
-    // Quadratic coefficients for the sphere intersection
+    // Quadratic formula coefficients
     float a = glm::dot(rd, rd);
     float b = 2.0f * glm::dot(ro, rd);
     float c = glm::dot(ro, ro) - radius * radius;
 
-    // Compute discriminant to check intersection
     float discriminant = b * b - 4.0f * a * c;
     if (discriminant < 0.0f) {
-        // No real roots; the ray misses the sphere
         return -1.0f;
     }
 
-    // Compute intersection points using the quadratic formula
     float sqrtDiscriminant = sqrtf(discriminant);
     float t1 = (-b - sqrtDiscriminant) / (2.0f * a);
     float t2 = (-b + sqrtDiscriminant) / (2.0f * a);
 
-    // Find the nearest valid intersection point
+    // Choose nearest positive intersection
     float t = (t1 > 0.0f) ? t1 : (t2 > 0.0f ? t2 : -1.0f);
     if (t < 0.0f) {
-        // Both intersections are behind the ray origin
         return -1.0f;
     }
 
-    // Set outside flag: if we used t1, we're outside; if t2, we're inside
     outside = (t1 > 0.0f);
 
-    // Compute object-space intersection point
     glm::vec3 objSpaceIntersection = ro + t * rd;
 
-    // Transform intersection point and normal back to world space
+    // Transform back to world space
     intersectionPoint = multiplyMV(sphere.transform, glm::vec4(objSpaceIntersection, 1.0f));
     normal = glm::normalize(multiplyMV(sphere.invTranspose, glm::vec4(objSpaceIntersection, 0.0f)));
 
-    // Flip normal if hitting from inside
     if (!outside) {
         normal = -normal;
     }
 
-    // Return the distance from the ray origin to the intersection point
     return glm::length(r.origin - intersectionPoint);
 }
 
+// AABB test for BVH traversal
 __device__ bool intersectAABB(const Ray& ray, const glm::vec3& aabbMin, const glm::vec3& aabbMax) {
     glm::vec3 invDir = 1.0f / ray.direction;
     glm::vec3 t0 = (aabbMin - ray.origin) * invDir;
@@ -129,7 +125,7 @@ __device__ bool intersectAABB(const Ray& ray, const glm::vec3& aabbMin, const gl
     return tNear <= tFar && tFar > 0.0f;
 }
 
-// Helper: Triangle intersection with barycentric interpolation
+// Moller-Trumbore triangle intersection with attribute interpolation
 __device__ bool intersectTriangle(
     const glm::vec3& ro, const glm::vec3& rd,
     const TriangleMeshData& mesh, int triIdx,
@@ -140,12 +136,10 @@ __device__ bool intersectTriangle(
 {
     const float EPS = 1e-7f;
 
-    // Triangle indices
     const unsigned int i0 = mesh.indices[triIdx * 3 + 0];
     const unsigned int i1 = mesh.indices[triIdx * 3 + 1];
     const unsigned int i2 = mesh.indices[triIdx * 3 + 2];
 
-    // Positions
     const glm::vec3 v0(mesh.vertices[i0 * 3 + 0], mesh.vertices[i0 * 3 + 1], mesh.vertices[i0 * 3 + 2]);
     const glm::vec3 v1(mesh.vertices[i1 * 3 + 0], mesh.vertices[i1 * 3 + 1], mesh.vertices[i1 * 3 + 2]);
     const glm::vec3 v2(mesh.vertices[i2 * 3 + 0], mesh.vertices[i2 * 3 + 1], mesh.vertices[i2 * 3 + 2]);
@@ -171,7 +165,7 @@ __device__ bool intersectTriangle(
 
     const float w = 1.0f - u - v;
 
-    // Interpolate normals
+    // Barycentric interpolation of normals
     if (mesh.normals) {
         glm::vec3 n0(mesh.normals[i0 * 3 + 0], mesh.normals[i0 * 3 + 1], mesh.normals[i0 * 3 + 2]);
         glm::vec3 n1(mesh.normals[i1 * 3 + 0], mesh.normals[i1 * 3 + 1], mesh.normals[i1 * 3 + 2]);
@@ -182,7 +176,7 @@ __device__ bool intersectTriangle(
         normal_out = glm::normalize(glm::cross(e1, e2));
     }
 
-    // Interpolate UVs
+    // Barycentric interpolation of UVs
     if (mesh.texcoords) {
         glm::vec2 uv0(mesh.texcoords[i0 * 2], mesh.texcoords[i0 * 2 + 1]);
         glm::vec2 uv1(mesh.texcoords[i1 * 2], mesh.texcoords[i1 * 2 + 1]);
@@ -193,7 +187,7 @@ __device__ bool intersectTriangle(
         uv_out = glm::vec2(0.0f);
     }
 
-    // Interpolate tangents
+    // Barycentric interpolation of tangents
     if (mesh.tangents) {
         glm::vec4 t0(mesh.tangents[i0 * 4 + 0], mesh.tangents[i0 * 4 + 1], mesh.tangents[i0 * 4 + 2], mesh.tangents[i0 * 4 + 3]);
         glm::vec4 t1(mesh.tangents[i1 * 4 + 0], mesh.tangents[i1 * 4 + 1], mesh.tangents[i1 * 4 + 2], mesh.tangents[i1 * 4 + 3]);
@@ -201,14 +195,14 @@ __device__ bool intersectTriangle(
         tangent_out = glm::normalize(w * t0 + u * t1 + v * t2);
     }
     else {
-        tangent_out = glm::vec4(1, 0, 0, 1); // fallback
+        tangent_out = glm::vec4(1, 0, 0, 1);
     }
 
     t_out = t;
     return true;
 }
 
-// Brute-force mesh intersection
+// Naive mesh intersection (tests all triangles)
 __device__ float meshIntersectionTest(
     const Geom& geom,
     const TriangleMeshData& mesh,
@@ -247,26 +241,26 @@ __device__ float meshIntersectionTest(
 
     if (!hit) return -1.0f;
 
-    // Object to world
+    // Transform from object to world space
     const glm::vec3 Pobj = ro + rd * tClosest;
     intersectionPoint = glm::vec3(geom.transform * glm::vec4(Pobj, 1.0f));
     normal = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(bestNormal, 0.0f)));
 
-    // Tangent to world
+    // Transform tangent to world space and orthogonalize
     glm::vec3 T_world = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(glm::vec3(bestTangent), 0.0f)));
     T_world = glm::normalize(T_world - normal * glm::dot(normal, T_world));
     tangent = glm::vec4(T_world, bestTangent.w);
 
     uv = bestUV;
 
-    // Orient correctly
+    // Determine front/back facing
     outside = glm::dot(r.direction, normal) < 0.0f;
     if (!outside) normal = -normal;
 
     return glm::length(intersectionPoint - r.origin);
 }
 
-// Single triangle intersection (used in BVH traversal)
+// Single triangle intersection in world space (used by BVH)
 __device__ float singleTriangleIntersectionTestWorldSpace(
     const Geom& geom,
     const TriangleMeshData& mesh,
@@ -280,17 +274,16 @@ __device__ float singleTriangleIntersectionTestWorldSpace(
 {
     const float EPS = 1e-7f;
 
-    // Get triangle indices
     const unsigned int i0 = mesh.indices[triangleIndex * 3];
     const unsigned int i1 = mesh.indices[triangleIndex * 3 + 1];
     const unsigned int i2 = mesh.indices[triangleIndex * 3 + 2];
 
-    // Get vertices in object space
+    // Load object-space vertices
     glm::vec3 v0_obj(mesh.vertices[i0 * 3], mesh.vertices[i0 * 3 + 1], mesh.vertices[i0 * 3 + 2]);
     glm::vec3 v1_obj(mesh.vertices[i1 * 3], mesh.vertices[i1 * 3 + 1], mesh.vertices[i1 * 3 + 2]);
     glm::vec3 v2_obj(mesh.vertices[i2 * 3], mesh.vertices[i2 * 3 + 1], mesh.vertices[i2 * 3 + 2]);
 
-    // Transform vertices to world space
+    // Transform to world space
     glm::vec3 v0 = glm::vec3(geom.transform * glm::vec4(v0_obj, 1.0f));
     glm::vec3 v1 = glm::vec3(geom.transform * glm::vec4(v1_obj, 1.0f));
     glm::vec3 v2 = glm::vec3(geom.transform * glm::vec4(v2_obj, 1.0f));
@@ -320,7 +313,6 @@ __device__ float singleTriangleIntersectionTestWorldSpace(
 
     const float w = 1.0f - u - v;
 
-    // Intersection point 
     intersectionPoint = worldRay.origin + t * worldRay.direction;
 
     // Interpolate and transform normal

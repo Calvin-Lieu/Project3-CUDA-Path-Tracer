@@ -8,57 +8,27 @@
 
 #include <thrust/random.h>
 
-#define MAX_MATERIALS 128
+// Debugging hit counts
+//#define MAX_MATERIALS 128
+//
+//__device__ inline int gDiffuseCounts[MAX_MATERIALS];
+//__device__ inline int gSpecularCounts[MAX_MATERIALS];
+//__device__ inline int gRefractiveCounts[MAX_MATERIALS];
 
-__device__ inline int gDiffuseCounts[MAX_MATERIALS];
-__device__ inline int gSpecularCounts[MAX_MATERIALS];
-__device__ inline int gRefractiveCounts[MAX_MATERIALS];
+ // Computes a cosine-weighted random direction in a hemisphere. Used for diffuse lighting.
 
-// CHECKITOUT
-/**
- * Computes a cosine-weighted random direction in a hemisphere.
- * Used for diffuse lighting.
- */
 __host__ __device__ glm::vec3 calculateRandomDirectionInHemisphere(
     glm::vec3 normal, 
     thrust::default_random_engine& rng);
 
-/**
- * Scatter a ray with some probabilities according to the material properties.
- * For example, a diffuse surface scatters in a cosine-weighted hemisphere.
- * A perfect specular surface scatters in the reflected ray direction.
- * In order to apply multiple effects to one surface, probabilistically choose
- * between them.
- *
- * The visual effect you want is to straight-up add the diffuse and specular
- * components. You can do this in a few ways. This logic also applies to
- * combining other types of materias (such as refractive).
- *
- * - Always take an even (50/50) split between a each effect (a diffuse bounce
- *   and a specular bounce), but divide the resulting color of either branch
- *   by its probability (0.5), to counteract the chance (0.5) of the branch
- *   being taken.
- *   - This way is inefficient, but serves as a good starting point - it
- *     converges slowly, especially for pure-diffuse or pure-specular.
- * - Pick the split based on the intensity of each material color, and divide
- *   branch result by that branch's probability (whatever probability you use).
- *
- * This method applies its changes to the Ray parameter `ray` in place.
- * It also modifies the color `color` of the ray in place.
- *
- * You may need to change the parameter list for your purposes!
- */
 
-__device__ float fresnelDielectric(float cosThetaI, float etaI, float etaT);
-
+// Scatter a ray with some probabilities according to the material properties.
 __device__ void scatterRay(
     PathSegment& pathSegment,
     glm::vec3 intersect,
     glm::vec3 normal,
     const Material& m,
-    thrust::default_random_engine& rng,
-    int depth,
-    int materialId);
+    thrust::default_random_engine& rng);
 
 __host__ __device__ inline bool isDiffuse(const Material& m) {
     return (m.hasReflective < 0.5f) && (m.hasRefractive < 0.5f);
@@ -105,7 +75,7 @@ __device__ inline float G_SmithGGX(float NoV, float NoL, float alpha) {
     return 2.0f * NoL * NoV / (GGXV + GGXL + 1e-6f);
 }
 
-// --- Vec3 version (For metals/rough GGX) ---
+// Vec3 version (For metals/rough GGX)
 __host__ __device__ inline glm::vec3 Fresnel_Schlick(
     float cosTheta,
     const glm::vec3& F0)
@@ -116,7 +86,7 @@ __host__ __device__ inline glm::vec3 Fresnel_Schlick(
     return F0 + (glm::vec3(1.0f) - F0) * m5;
 }
 
-// --- Float version (Ffor glass/dielectrics) ---
+// Float version (Ffor glass/dielectrics)
 __host__ __device__ inline float Fresnel_Schlick(
     float cosTheta,
     float etaI,

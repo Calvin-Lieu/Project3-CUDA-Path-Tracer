@@ -34,7 +34,7 @@ else(UNIX)
     set(GLFW_ROOT_DIR ${EXTERNAL})
     set(GLFW_USE_STATIC_LIBS ON)
     find_package(GLFW REQUIRED)
-
+    
     set(GLEW_ROOT_DIR ${EXTERNAL})
     set(GLEW_USE_STATIC_LIBS ON)
     find_package(GLEW REQUIRED)
@@ -48,6 +48,11 @@ set(GLM_ROOT_DIR "${CMAKE_SOURCE_DIR}/external")
 find_package(GLM REQUIRED)
 include_directories(${GLM_INCLUDE_DIRS})
 
+# OpenImageDenoise include path
+include_directories(${EXTERNAL}/include)
+
+# OpenImageDenoise lib path
+link_directories(${EXTERNAL}/lib)
 set(headers
     src/image.h
     src/interactions.h
@@ -123,7 +128,14 @@ source_group("ImGui\\Sources" FILES ${imgui_sources})
 add_executable(${CMAKE_PROJECT_NAME} ${sources} ${headers} ${imgui_sources} ${imgui_headers} "external/include/tiny_gltf.h" "src/tiny_gltf.cpp")
 target_link_libraries(${CMAKE_PROJECT_NAME}
     ${GL_LIBRARIES}
+    OpenImageDenoise
+    OpenImageDenoise_core
     #stream_compaction  # TODO: uncomment if using your stream compaction
+)
+add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/external/bin
+        $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>
 )
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES CUDA_ARCHITECTURES native)

@@ -290,6 +290,7 @@ void RenderImGui()
     ImGui::Checkbox("Enable RR", &guiData->UseRussianRoulette);
     ImGui::Checkbox("Direct Lighting (NEE)", &guiData->UseDirectLighting);
     ImGui::Checkbox("Use BVH Acceleration", &guiData->UseBVH);
+    ImGui::Checkbox("Use Denoiser", &guiData->UseDenoiser);
     ImGui::SliderFloat("Exposure (EV)", &guiData->Exposure, -5.0f, 5.0f);
     ImGui::SameLine();
     if (ImGui::Button("Reset")) guiData->Exposure = 0.0f;

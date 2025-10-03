@@ -1,5 +1,4 @@
 ﻿#pragma once
-#pragma once
 
 #include "sceneStructs.h"
 #include "json.hpp"

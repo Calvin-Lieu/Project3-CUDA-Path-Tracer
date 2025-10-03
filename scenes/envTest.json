@@ -45,8 +45,8 @@
             "TYPE": "gltf",
             "FILE": "../scenes/models/MasterChief/scene.gltf",
             "MATERIAL": "default",
-            "TRANS": [ 0.0, 0.2, 0.0 ],
-            "ROTAT": [ -90.0, 0.0, 60.0 ],
+            "TRANS": [ 0.0, -0.2, 0.0 ],
+            "ROTAT": [ -100.0, 0.0, 160.0 ],
             "SCALE": [ 1.0, 1.0, 1.0 ]
         }
     ]
