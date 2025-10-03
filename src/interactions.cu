@@ -6,6 +6,8 @@
 #include <thrust/swap.h>
 #include <math_constants.h>
 #include <glm/gtx/norm.hpp>
+#include <glm/gtx/component_wise.hpp>
+
 
 
 __host__ __device__ glm::vec3 calculateRandomDirectionInHemisphere(
@@ -85,7 +87,7 @@ __device__ void ggxSpecularBRDF(
 {
     float eps = 1e-3f;
     glm::vec3 n = glm::normalize(normal);
-    glm::vec3 wo = -glm::normalize(pathSegment.ray.direction); // outgoing/view
+    glm::vec3 wo = -glm::normalize(pathSegment.ray.direction); 
 
     float metallic = fminf(fmaxf(m.metallic, 0.f), 1.f);
     glm::vec3 F0 = glm::mix(glm::vec3(0.04f), m.color, metallic);
@@ -189,25 +191,48 @@ __host__ __device__ void dielectricBRDF(
 // ------------------------------------------------------------
 __device__ void scatterRay(
     PathSegment& pathSegment,
-    glm::vec3 intersect,
-    glm::vec3 normal,
+    glm::vec3 P,
+    glm::vec3 N,
     const Material& m,
-    thrust::default_random_engine& rng)
+    thrust::default_random_engine& rng,
+    int depth,
+    int materialId)
 {
-    if (m.hasReflective > 0.0f || m.metallic > 0.0f) {
-        // GGX specular/metallic
-        //printf("GGX Specular/Metallic\n");
-        ggxSpecularBRDF(pathSegment, normal, m, rng, intersect);
+    // Dielectric path 
+    if (m.hasRefractive > 0.5f || m.transmission > 0.0f) {
+        dielectricBRDF(pathSegment, N, m, rng, P);
+        //atomicAdd(&gRefractiveCounts[materialId], 1);
+        pathSegment.remainingBounces--;
+        return;
     }
-    else if (m.hasRefractive > 0.0f) {
-        // Dielectric glass
-        //printf("Dielectric Glass\n");
-        dielectricBRDF(pathSegment, normal, m, rng, intersect);
-    }
-    else {
-        // Diffuse
-        //printf("Diffuse\n");
-        diffuseBRDF(pathSegment, normal, m, rng, intersect);
+
+    // Opaque metallic-roughness mixture 
+    // Clamp inputs
+    float metallic  = glm::clamp(m.metallic,  0.0f, 1.0f);
+    float roughness = glm::clamp(m.roughness, 0.04f, 1.0f);
+
+    // Base reflectance:
+    glm::vec3 F0 = glm::mix(glm::vec3(0.04f), m.color, metallic);
+
+    // Lobe weights:
+    //   Metals: no diffuse 
+    float Favg = 0.3333f * (F0.x + F0.y + F0.z);  // average Fresnel at normal incidence
+    float diffuseWeight = (1.0f - metallic) * (1.0f - Favg);
+    diffuseWeight = glm::clamp(diffuseWeight, 0.0f, 1.0f);
+    float specWeight = 1.0f - diffuseWeight;
+
+    // Sample which lobe to use
+    thrust::uniform_real_distribution<float> u01(0,1);
+    float xi = u01(rng);
+
+    if (xi < specWeight) {
+        // GGX specular
+        ggxSpecularBRDF(pathSegment, N, m, rng, P);
+        //atomicAdd(&gSpecularCounts[materialId], 1);
+    } else {
+        // Lambertian diffuse
+        diffuseBRDF(pathSegment, N, m, rng, P);
+        //atomicAdd(&gDiffuseCounts[materialId], 1);
     }
 
     pathSegment.remainingBounces--;

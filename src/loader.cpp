@@ -8,6 +8,58 @@ static int remapTex(int idx, size_t textureOffset) {
     return (idx >= 0) ? int(idx + textureOffset) : -1;
 }
 
+void printMaterial(const Material& m, const std::string& name, int idx) {
+    std::cout << "Material[" << idx << "] " << name << "\n";
+    std::cout << "  BaseColor: (" << m.color.r << ", "
+        << m.color.g << ", " << m.color.b << ")\n";
+
+    std::cout << "  Specular: exp=" << m.specular.exponent
+        << " color=(" << m.specular.color.r << ", "
+        << m.specular.color.g << ", " << m.specular.color.b << ")\n";
+
+    std::cout << "  Metallic=" << m.metallic
+        << " Roughness=" << m.roughness << "\n";
+
+    std::cout << "  Reflective=" << m.hasReflective
+        << " Refractive=" << m.hasRefractive
+        << " IOR=" << m.indexOfRefraction << "\n";
+
+    std::cout << "  Emittance=" << m.emittance
+        << " EmissiveFactor=(" << m.emissiveFactor.r << ", "
+        << m.emissiveFactor.g << ", " << m.emissiveFactor.b << ")\n";
+
+    std::cout << "  Textures: BaseColor=" << m.baseColorTexture
+        << " MR=" << m.metallicRoughnessTexture
+        << " Normal=" << m.normalTexture
+        << " Emissive=" << m.emissiveTexture
+        << " Occlusion=" << m.occlusionTexture << "\n";
+
+    std::cout << "  OcclusionStrength=" << m.occlusionStrength << "\n";
+
+    std::cout << "  Transmission=" << m.transmission
+        << " Thickness=" << m.thickness
+        << " AttenDist=" << m.attenuationDistance
+        << " AttenColor=(" << m.attenuationColor.r << ", "
+        << m.attenuationColor.g << ", " << m.attenuationColor.b << ")\n";
+
+    std::cout << "  AlphaMode=" << m.alphaMode
+        << " Cutoff=" << m.alphaCutoff << "\n";
+
+    if (m.hasRefractive > 0.5f) {
+        std::cout << "  >>> REFRACTIVE material <<<\n";
+    }
+    else if (m.hasReflective > 0.5f) {
+        std::cout << "  >>> REFLECTIVE/GLOSSY material <<<\n";
+    }
+    else {
+        std::cout << "  >>> DIFFUSE material <<<\n";
+    }
+
+    std::cout << std::endl;
+}
+
+
+
 template <int N>
 static void readAccessor(const tinygltf::Model& model, const tinygltf::Accessor& acc, std::vector<float>& out) {
     const tinygltf::BufferView& bv = model.bufferViews[acc.bufferView];
@@ -133,6 +185,10 @@ void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
         newTex.height = image.height;
         newTex.channels = image.component;
         newTex.data = nullptr;
+        std::cout << "Texture: " << model.images[tex.source].uri
+            << " (" << image.width << "x" << image.height
+            << ", channels=" << image.component << ")\n";
+
         textures.push_back({ image.image, newTex });
     }
 
@@ -151,8 +207,15 @@ void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
         }
 
         // PBR factors
-        newMat.metallic = static_cast<float>(mat.pbrMetallicRoughness.metallicFactor);
-        newMat.roughness = static_cast<float>(mat.pbrMetallicRoughness.roughnessFactor);
+        newMat.metallic = mat.pbrMetallicRoughness.metallicFactor >= 0.0
+            ? static_cast<float>(mat.pbrMetallicRoughness.metallicFactor)
+            : 1.0f;
+        newMat.roughness = mat.pbrMetallicRoughness.roughnessFactor >= 0.0
+            ? static_cast<float>(mat.pbrMetallicRoughness.roughnessFactor)
+            : 1.0f;
+
+        newMat.metallic = glm::clamp(newMat.metallic, 0.0f, 1.0f);
+        newMat.roughness = glm::clamp(newMat.roughness, 0.04f, 1.0f);
 
         // Texture indices
         newMat.baseColorTexture = (mat.pbrMetallicRoughness.baseColorTexture.index >= 0)
@@ -222,7 +285,21 @@ void MaterialLoader::appendFromGLTF(const tinygltf::Model& model,
                 newMat.indexOfRefraction = static_cast<float>(ext.Get("ior").Get<double>());
         }
 
+        if (newMat.transmission > 0.01f || newMat.alphaMode == 2) {
+            newMat.hasRefractive = 1.0f;
+            newMat.hasReflective = 0.0f;
+            if (newMat.indexOfRefraction <= 0.0f) newMat.indexOfRefraction = 1.5f;
+            if (newMat.thickness < 0.0f) newMat.thickness = 0.0f;
+            if (newMat.attenuationDistance <= 0.0f) newMat.attenuationDistance = 1e6f;
+        }
+        else {
+            newMat.hasRefractive = 0.0f;
+            bool glossy = (newMat.metallic > 0.02f) || (newMat.roughness < 0.95f);
+            newMat.hasReflective = glossy ? 1.0f : 0.0f;
+        }
+    	int idx = static_cast<int>(materials.size());
         materials.push_back(newMat);
+        printMaterial(materials.back(), mat.name, idx);
     }
 }
 
@@ -327,7 +404,12 @@ void GeometryLoader::processGLTFNode(const tinygltf::Model& model,
         glm::mat4 R = glm::mat4_cast(rotation);
         glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
         nodeTransform = parentTransform * T * R * S;
+        if (node.translation.size() == 3) {
+            translation = glm::vec3(node.translation[0], node.translation[1], node.translation[2]);
+            std::cout << "Node translation: " << translation.x << ", " << translation.y << ", " << translation.z << "\n";
+        }
     }
+
 
     if (node.mesh >= 0) {
         processGLTFMesh(model, model.meshes[node.mesh],

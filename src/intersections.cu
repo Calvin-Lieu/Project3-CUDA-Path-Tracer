@@ -267,41 +267,101 @@ __device__ float meshIntersectionTest(
 }
 
 // Single triangle intersection (used in BVH traversal)
-__device__ float singleTriangleIntersectionTest(
+__device__ float singleTriangleIntersectionTestWorldSpace(
     const Geom& geom,
     const TriangleMeshData& mesh,
     int triangleIndex,
-    const Ray& r,
+    const Ray& worldRay,
     glm::vec3& intersectionPoint,
     glm::vec3& normal,
     bool& outside,
     glm::vec2& uv,
     glm::vec4& tangent)
 {
-    glm::vec3 ro = glm::vec3(geom.inverseTransform * glm::vec4(r.origin, 1.0f));
-    glm::vec3 rd = glm::normalize(glm::vec3(geom.inverseTransform * glm::vec4(r.direction, 0.0f)));
+    const float EPS = 1e-7f;
 
-    float t_tmp;
-    glm::vec3 n_tmp;
-    glm::vec2 uv_tmp;
-    glm::vec4 tangent_tmp;
+    // Get triangle indices
+    const unsigned int i0 = mesh.indices[triangleIndex * 3];
+    const unsigned int i1 = mesh.indices[triangleIndex * 3 + 1];
+    const unsigned int i2 = mesh.indices[triangleIndex * 3 + 2];
 
-    if (!intersectTriangle(ro, rd, mesh, triangleIndex, t_tmp, n_tmp, uv_tmp, tangent_tmp)) {
-        return -1.0f;
+    // Get vertices in object space
+    glm::vec3 v0_obj(mesh.vertices[i0 * 3], mesh.vertices[i0 * 3 + 1], mesh.vertices[i0 * 3 + 2]);
+    glm::vec3 v1_obj(mesh.vertices[i1 * 3], mesh.vertices[i1 * 3 + 1], mesh.vertices[i1 * 3 + 2]);
+    glm::vec3 v2_obj(mesh.vertices[i2 * 3], mesh.vertices[i2 * 3 + 1], mesh.vertices[i2 * 3 + 2]);
+
+    // Transform vertices to world space
+    glm::vec3 v0 = glm::vec3(geom.transform * glm::vec4(v0_obj, 1.0f));
+    glm::vec3 v1 = glm::vec3(geom.transform * glm::vec4(v1_obj, 1.0f));
+    glm::vec3 v2 = glm::vec3(geom.transform * glm::vec4(v2_obj, 1.0f));
+
+    // Moller-Trumbore in world space
+    const glm::vec3 e1 = v1 - v0;
+    const glm::vec3 e2 = v2 - v0;
+    const glm::vec3 pvec = glm::cross(worldRay.direction, e2);
+    const float det = glm::dot(e1, pvec);
+
+    if (fabsf(det) < EPS) return -1.0f;
+
+    const float invDet = 1.0f / det;
+    const glm::vec3 tvec = worldRay.origin - v0;
+    const float u = glm::dot(tvec, pvec) * invDet;
+
+    if (u < 0.0f || u > 1.0f) return -1.0f;
+
+    const glm::vec3 qvec = glm::cross(tvec, e1);
+    const float v = glm::dot(worldRay.direction, qvec) * invDet;
+
+    if (v < 0.0f || (u + v) > 1.0f) return -1.0f;
+
+    const float t = glm::dot(e2, qvec) * invDet;
+
+    if (t <= EPS) return -1.0f;
+
+    const float w = 1.0f - u - v;
+
+    // Intersection point 
+    intersectionPoint = worldRay.origin + t * worldRay.direction;
+
+    // Interpolate and transform normal
+    if (mesh.normals) {
+        glm::vec3 n0(mesh.normals[i0 * 3], mesh.normals[i0 * 3 + 1], mesh.normals[i0 * 3 + 2]);
+        glm::vec3 n1(mesh.normals[i1 * 3], mesh.normals[i1 * 3 + 1], mesh.normals[i1 * 3 + 2]);
+        glm::vec3 n2(mesh.normals[i2 * 3], mesh.normals[i2 * 3 + 1], mesh.normals[i2 * 3 + 2]);
+        glm::vec3 n_obj = glm::normalize(w * n0 + u * n1 + v * n2);
+        normal = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(n_obj, 0.0f)));
+    }
+    else {
+        normal = glm::normalize(glm::cross(e1, e2));
     }
 
-    const glm::vec3 Pobj = ro + rd * t_tmp;
-    intersectionPoint = glm::vec3(geom.transform * glm::vec4(Pobj, 1.0f));
-    normal = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(n_tmp, 0.0f)));
+    // Interpolate UVs
+    if (mesh.texcoords) {
+        glm::vec2 uv0(mesh.texcoords[i0 * 2], mesh.texcoords[i0 * 2 + 1]);
+        glm::vec2 uv1(mesh.texcoords[i1 * 2], mesh.texcoords[i1 * 2 + 1]);
+        glm::vec2 uv2(mesh.texcoords[i2 * 2], mesh.texcoords[i2 * 2 + 1]);
+        uv = w * uv0 + u * uv1 + v * uv2;
+    }
+    else {
+        uv = glm::vec2(0.0f);
+    }
 
-    glm::vec3 T_world = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(glm::vec3(tangent_tmp), 0.0f)));
-    T_world = glm::normalize(T_world - normal * glm::dot(normal, T_world));
-    tangent = glm::vec4(T_world, tangent_tmp.w);
+    // Interpolate and transform tangents
+    if (mesh.tangents) {
+        glm::vec4 t0(mesh.tangents[i0 * 4], mesh.tangents[i0 * 4 + 1], mesh.tangents[i0 * 4 + 2], mesh.tangents[i0 * 4 + 3]);
+        glm::vec4 t1(mesh.tangents[i1 * 4], mesh.tangents[i1 * 4 + 1], mesh.tangents[i1 * 4 + 2], mesh.tangents[i1 * 4 + 3]);
+        glm::vec4 t2(mesh.tangents[i2 * 4], mesh.tangents[i2 * 4 + 1], mesh.tangents[i2 * 4 + 2], mesh.tangents[i2 * 4 + 3]);
+        glm::vec4 t_obj = w * t0 + u * t1 + v * t2;
+        glm::vec3 T_world = glm::normalize(glm::vec3(geom.invTranspose * glm::vec4(glm::vec3(t_obj), 0.0f)));
+        T_world = glm::normalize(T_world - normal * glm::dot(normal, T_world));
+        tangent = glm::vec4(T_world, t_obj.w);
+    }
+    else {
+        tangent = glm::vec4(1, 0, 0, 1);
+    }
 
-    uv = uv_tmp;
-
-    outside = glm::dot(r.direction, normal) < 0.0f;
+    outside = glm::dot(worldRay.direction, normal) < 0.0f;
     if (!outside) normal = -normal;
 
-    return glm::length(intersectionPoint - r.origin);
+    return t;
 }

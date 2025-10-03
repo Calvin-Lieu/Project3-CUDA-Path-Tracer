@@ -27,16 +27,15 @@ __device__ void sampleCubeLight(const Geom& g,
 __device__ bool visible(const glm::vec3& P, const glm::vec3& Q,
     const glm::vec3& N, const Geom* geoms, int ngeoms);
 
-// One-sample NEE for diffuse (MIS power heuristic)
-__device__ void addDirectLighting_NEEDiffuse(
+__device__ void addDirectLightingNEE(
     const glm::vec3& P,
     const glm::vec3& N,
     const glm::vec3& wo,
     const Material* __restrict__ materials,
     const Geom* __restrict__ geoms, int ngeoms,
     const int* __restrict__ lightIdx, int numLights,
-    const glm::vec3& albedo,
-    const glm::vec3& throughput,
+    const glm::vec3& albedoTimesThroughput,
+    float metallic, float roughness,
     int pixelIndex,
     glm::vec3* __restrict__ image,
     thrust::default_random_engine& rng,

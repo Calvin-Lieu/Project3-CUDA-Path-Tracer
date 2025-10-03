@@ -159,7 +159,6 @@ void BVHBuilder::computePrimitiveAABB(
         }
     }
     else {
-        // Compute AABB for triangle
         const MeshData& mesh = meshes[g.meshIndex];
         unsigned int i0 = mesh.indices[prim.triangleIndex * 3];
         unsigned int i1 = mesh.indices[prim.triangleIndex * 3 + 1];
@@ -169,14 +168,27 @@ void BVHBuilder::computePrimitiveAABB(
         glm::vec3 v1(mesh.vertices[i1 * 3], mesh.vertices[i1 * 3 + 1], mesh.vertices[i1 * 3 + 2]);
         glm::vec3 v2(mesh.vertices[i2 * 3], mesh.vertices[i2 * 3 + 1], mesh.vertices[i2 * 3 + 2]);
 
-        // Transform to world space
         v0 = glm::vec3(g.transform * glm::vec4(v0, 1.0f));
         v1 = glm::vec3(g.transform * glm::vec4(v1, 1.0f));
         v2 = glm::vec3(g.transform * glm::vec4(v2, 1.0f));
 
         min = glm::min(v0, glm::min(v1, v2));
         max = glm::max(v0, glm::max(v1, v2));
+
+        // Account for inverse transform precision errors
+        // Use relative epsilon based on coordinate magnitude
+        glm::vec3 center = (min + max) * 0.5f;
+        float coordMagnitude = glm::length(center);
+        float eps = fmaxf(1e-3f, coordMagnitude * 1e-5f);  // Scale epsilon with distance from origin
+
+        min -= glm::vec3(eps);
+        max += glm::vec3(eps);
     }
+    //if (prim.triangleIndex < 5) {  // Print first 5 triangles
+    //    std::cout << "Triangle " << prim.triangleIndex
+    //        << " AABB: min=(" << min.x << "," << min.y << "," << min.z << ") "
+    //        << " max=(" << max.x << "," << max.y << "," << max.z << ")\n";
+    //}
 }
 
 glm::vec3 BVHBuilder::getPrimitiveCenter(

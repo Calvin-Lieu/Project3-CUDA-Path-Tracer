@@ -24,6 +24,9 @@ public:
     bool UseRussianRoulette = true;
     bool UseDirectLighting = true;
     bool UseBVH = true;
+    int ToneMappingMode = 0;
+    float Exposure = 0.0f;
+    float Gamma = 1.3f;
 };
 
 namespace utilityCore

@@ -25,7 +25,7 @@
         "metal_gold": {
             "TYPE": "Specular",
             "RGB": [ 1.0, 0.85, 0.57 ],
-            "ROUGHNESS": 0.1,
+            "ROUGHNESS": 0.5,
             "METALLIC": 1.0,
             "HASREFLECTIVE": 1.0
         }
@@ -40,27 +40,14 @@
         "LOOKAT": [ 0.0, 0.3, 0.0 ],
         "UP": [ 0.0, 1.0, 0.0 ]
     },
-    "Objects": [
+    "Objects": [ 
         {
-            "TYPE": "sphere",
-            "MATERIAL": "glass",
-            "TRANS": [ -1.0, 4.0, 3.0 ],
-            "ROTAT": [ 0.0, 0.0, 0.0 ],
-            "SCALE": [ 3.0, 3.0, 3.0 ]
-        },
-        {
-            "TYPE": "sphere",
-            "MATERIAL": "glass",
-            "TRANS": [ 3.0, 2.0, 0.0 ],
-            "ROTAT": [ 0.0, 0.0, 0.0 ],
-            "SCALE": [ 1.5, 1.5, 1.5 ]
-        },
-        {
-            "TYPE": "sphere",
-            "MATERIAL": "metal_gold",
-            "TRANS": [ -2.0, 2.0, 1.0 ],
-            "ROTAT": [ 0.0, 0.0, 0.0 ],
-            "SCALE": [ 1.5, 1.5, 1.5 ]
+            "TYPE": "gltf",
+            "FILE": "../scenes/models/MasterChief/scene.gltf",
+            "MATERIAL": "default",
+            "TRANS": [ 0.0, 0.2, 0.0 ],
+            "ROTAT": [ -90.0, 0.0, 60.0 ],
+            "SCALE": [ 1.0, 1.0, 1.0 ]
         }
     ]
 }

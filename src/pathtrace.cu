@@ -60,27 +60,54 @@ void checkCUDAErrorFn(const char* msg, const char* file, int line)
 #endif
 }
 
+__device__ __host__ inline glm::vec3 ReinhardToneMap(const glm::vec3& x)
+{
+    // Simple Reinhard: color / (1 + color)
+    return x / (glm::vec3(1.0f) + x);
+}
+
+__device__ __host__ inline glm::vec3 ACESToneMap(const glm::vec3& x)
+{
+    // Constants from ACES approximation (Narkowicz 2015)
+    const float a = 2.51f;
+    const float b = 0.03f;
+    const float c = 2.43f;
+    const float d = 0.59f;
+    const float e = 0.14f;
+    return glm::clamp((x * (a * x + b)) / (x * (c * x + d) + e),
+        glm::vec3(0.0f), glm::vec3(1.0f));
+}
+
 // Kernel that writes the image to the OpenGL PBO directly.
-__global__ void sendImageToPBO(uchar4* pbo, glm::ivec2 resolution, int iter, glm::vec3* image)
+__global__ void sendImageToPBO(uchar4* pbo, glm::ivec2 resolution, int iter, glm::vec3* image, int toneMappingMode, float exposure, float gamma)
 {
     int x = (blockIdx.x * blockDim.x) + threadIdx.x;
     int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+    if (x >= resolution.x || y >= resolution.y) return;
 
-    if (x < resolution.x && y < resolution.y)
-    {
-        int index = x + (y * resolution.x);
-        glm::vec3 pix = image[index];
+    int idx = x + y * resolution.x;
 
-        glm::ivec3 color;
-        color.x = glm::clamp((int)(pix.x / iter * 255.0), 0, 255);
-        color.y = glm::clamp((int)(pix.y / iter * 255.0), 0, 255);
-        color.z = glm::clamp((int)(pix.z / iter * 255.0), 0, 255);
+    // Average accumulated radiance
+    glm::vec3 color = image[idx] / (float)iter;
 
-        pbo[index].w = 0;
-        pbo[index].x = color.x;
-        pbo[index].y = color.y;
-        pbo[index].z = color.z;
+    color *= powf(2.0f, exposure);
+
+    // Apply tone mapping if enabled
+    if (toneMappingMode == 1) {
+        color = ReinhardToneMap(color);
     }
+    else if (toneMappingMode == 2) {
+        color = ACESToneMap(color);
+    }
+
+    // Apply gamma correction 
+    color = pow(color, glm::vec3(1.0f / gamma));
+
+    pbo[idx] = make_uchar4(
+        (unsigned char)(fminf(color.r, 1.0f) * 255.0f),
+        (unsigned char)(fminf(color.g, 1.0f) * 255.0f),
+        (unsigned char)(fminf(color.b, 1.0f) * 255.0f),
+        255);
 }
 
 static Scene* hst_scene = NULL;
@@ -279,10 +306,7 @@ void pathtraceInit(Scene* scene)
         cudaMemcpy(dev_lightGeomIdx, lightIdx.data(),
             hst_numLights * sizeof(int), cudaMemcpyHostToDevice);
     }
-    //printf("Found %d lights\n", hst_numLights);
-    //for (int i = 0; i < hst_numLights; i++) {
-    //    printf("  Light %d: geom index %d\n", i, lightIdx[i]);
-    //}
+
 
     if (!scene->textures.empty()) {
         numTextures = scene->textures.size();
@@ -546,11 +570,11 @@ __global__ void computeIntersectionsBVH(
     const BVHPrimitive* __restrict__ primitives,
     const TriangleMeshData* __restrict__ meshes,
     ShadeableIntersection* __restrict__ intersections)
-{ 
+{
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_paths) return;
 
-    const Ray ray = pathSegments[idx].ray;
+    const Ray ray = pathSegments[idx].ray;  // World-space ray
 
     float t_min = 1e20f;
     int hit_i = -1;
@@ -558,12 +582,6 @@ __global__ void computeIntersectionsBVH(
     glm::vec2 uv_best(0.0f);
     glm::vec4 tangent_best(0.0f);
 
-    glm::vec3 I_tmp, N_tmp;
-    glm::vec2 uv_tmp;
-    glm::vec4 tangent_tmp;
-    bool outside;
-
-    // Stack for iterative BVH traversal
     int stack[64];
     int stackPtr = 0;
     stack[stackPtr++] = 0;
@@ -572,7 +590,6 @@ __global__ void computeIntersectionsBVH(
         int nodeIdx = stack[--stackPtr];
         const BVHNode& node = bvhNodes[nodeIdx];
 
-        // Test AABB
         if (!intersectAABB(ray, node.aabbMin, node.aabbMax)) continue;
 
         if (node.leftChild == -1) {
@@ -582,6 +599,10 @@ __global__ void computeIntersectionsBVH(
                 const Geom& g = geoms[prim.geomIndex];
 
                 float t = -1.0f;
+                glm::vec3 I_tmp, N_tmp;
+                glm::vec2 uv_tmp;
+                glm::vec4 tangent_tmp;
+                bool outside;
 
                 if (prim.type == PRIM_GEOM) {
                     if (g.type == CUBE) {
@@ -596,10 +617,9 @@ __global__ void computeIntersectionsBVH(
                     }
                 }
                 else {
-                    t = singleTriangleIntersectionTest(
+                    t = singleTriangleIntersectionTestWorldSpace(
                         g, meshes[g.meshIndex], prim.triangleIndex, ray,
-                        I_tmp, N_tmp, outside,
-                        uv_tmp, tangent_tmp);
+                        I_tmp, N_tmp, outside, uv_tmp, tangent_tmp);
                 }
 
                 if (t > 0.0f && t < t_min) {
@@ -612,8 +632,7 @@ __global__ void computeIntersectionsBVH(
             }
         }
         else {
-            // Interior node - add children to stack
-            if (stackPtr < 62) { // Leave room for both children
+            if (stackPtr < 62) {
                 stack[stackPtr++] = node.leftChild;
                 stack[stackPtr++] = node.rightChild;
             }
@@ -768,22 +787,26 @@ __global__ void shadeMaterials(
     // --- Base color ---
     glm::vec3 albedo = m.color;
     if (textures && m.baseColorTexture >= 0) {
-        albedo *= sampleTexture(textures[m.baseColorTexture], isect.uv.x, isect.uv.y);
+        glm::vec4 base = sampleTexture4(textures[m.baseColorTexture], isect.uv);
+        albedo *= glm::vec3(base);   
     }
     m.color = albedo;
 
     // --- Metallic-Roughness ---
     if (textures && m.metallicRoughnessTexture >= 0) {
-        glm::vec3 mr = sampleTexture(textures[m.metallicRoughnessTexture], isect.uv.x, isect.uv.y);
-        m.metallic *= mr.b;
-        m.roughness *= mr.g;
+        float metallic, roughness, occlusion;
+        sampleMetallicRoughness(m, textures, isect.uv, metallic, roughness, occlusion);
+
+        m.metallic = metallic;
+        m.roughness = roughness;
+        m.color *= 1.0f + (occlusion - 1.0f) * m.occlusionStrength;
     }
 
     // --- Normal mapping ---
     glm::vec3 shadingNormal = glm::normalize(isect.surfaceNormal);
     if (textures && m.normalTexture >= 0) {
-        glm::vec3 nSample = sampleTexture(textures[m.normalTexture], isect.uv.x, isect.uv.y);
-        nSample = glm::normalize(nSample * 2.0f - 1.0f);  // [0,1] -> [-1,1]
+        glm::vec3 nSample = sampleTexture3(textures[m.normalTexture], isect.uv.x, isect.uv.y);
+        nSample = glm::normalize(nSample * 2.0f - 1.0f); 
 
         glm::vec3 T = glm::normalize(glm::vec3(isect.tangent));
         glm::vec3 N = shadingNormal;
@@ -796,7 +819,7 @@ __global__ void shadeMaterials(
     // --- Occlusion ---
     float ao = 1.0f;
     if (textures && m.occlusionTexture >= 0) {
-        glm::vec3 occ = sampleTexture(textures[m.occlusionTexture], isect.uv.x, isect.uv.y);
+        glm::vec3 occ = sampleTexture3(textures[m.occlusionTexture], isect.uv.x, isect.uv.y);
         ao = 1.0f + (occ.r - 1.0f) * m.occlusionStrength;
     }
     m.color *= ao;
@@ -804,7 +827,7 @@ __global__ void shadeMaterials(
     // --- Emissive (additive) ---
     glm::vec3 Le_tex(0.0f);
     if (textures && m.emissiveTexture >= 0) {
-        Le_tex = sampleTexture(textures[m.emissiveTexture], isect.uv.x, isect.uv.y);
+        Le_tex = sampleTexture3(textures[m.emissiveTexture], isect.uv.x, isect.uv.y);
     }
     glm::vec3 Le_gltf = m.emissiveFactor * Le_tex;
 
@@ -842,22 +865,22 @@ __global__ void shadeMaterials(
     const glm::vec3 wo = -ps.ray.direction;
 
 
-    // NEE for diffuse surfaces
-    if (useNEE && numLights > 0 && isDiffuse(m)) {
-        addDirectLighting_NEEDiffuse(
+    // NEE for diffuse/specular/metallic
+    if (useNEE && numLights > 0 && !isDielectric(m)) {
+        addDirectLightingNEE(
             P, shadingNormal, wo,
             materials,
             geoms, ngeoms,
             lightIdx, numLights,
-            m.color,     
-            ps.color,    
+            m.color * ps.color,
+            m.metallic, m.roughness,
             ps.pixelIndex,
             image,
             rng,
             envMap);
     }
 
-    scatterRay(ps, P, shadingNormal, m, rng);
+    scatterRay(ps, P, shadingNormal, m, rng, depth, isect.materialId);
 
     if (useRR) applyRussianRoulette(ps, depth, 3, rng);
 }
@@ -875,6 +898,7 @@ __global__ void finalGather(int nPaths, glm::vec3* image, PathSegment* iteration
     }
 }
 
+
 void pathtrace(uchar4* pbo, int frame, int iter)
 {
     const int traceDepth = hst_scene->state.traceDepth;
@@ -887,6 +911,12 @@ void pathtrace(uchar4* pbo, int frame, int iter)
         (cam.resolution.y + blockSize2d.y - 1) / blockSize2d.y);
 
     const int blockSize1d = 128;
+
+    //std::array<int, MAX_MATERIALS> zeros{};
+    //cudaMemcpyToSymbol(gDiffuseCounts, zeros.data(), zeros.size() * sizeof(int));
+    //cudaMemcpyToSymbol(gSpecularCounts, zeros.data(), zeros.size() * sizeof(int));
+    //cudaMemcpyToSymbol(gRefractiveCounts, zeros.data(), zeros.size() * sizeof(int));
+    //checkCUDAError("zero material counters");
 
     generateRayFromCamera << <blocksPerGrid2d, blockSize2d >> > (cam, iter, traceDepth, dev_paths);
     checkCUDAError("generate camera ray");
@@ -980,11 +1010,28 @@ void pathtrace(uchar4* pbo, int frame, int iter)
             guiData->TracedDepth = depth;
         }
     }
+
+   /* int numMaterials = static_cast<int>(hst_scene->materials.size());
+    std::vector<int> hDiffuseCounts(numMaterials), hSpecularCounts(numMaterials), hRefractiveCounts(numMaterials);
+
+    cudaMemcpyFromSymbol(hDiffuseCounts.data(), gDiffuseCounts, numMaterials * sizeof(int));
+    cudaMemcpyFromSymbol(hSpecularCounts.data(), gSpecularCounts, numMaterials * sizeof(int));
+    cudaMemcpyFromSymbol(hRefractiveCounts.data(), gRefractiveCounts, numMaterials * sizeof(int));
+    checkCUDAError("copy material counters back");
+
+    for (size_t i = 0; i < hst_scene->materials.size(); ++i) {
+        std::cout << "Material[" << i << "] "
+            << "Diffuse=" << hDiffuseCounts[i]
+            << " Specular=" << hSpecularCounts[i]
+            << " Refractive=" << hRefractiveCounts[i]
+            << "\n";
+    }*/
       
     dim3 numBlocksPixels = (pixelcount + blockSize1d - 1) / blockSize1d;
     finalGather << <numBlocksPixels, blockSize1d >> > (num_paths, dev_image, dev_paths);
 
-    sendImageToPBO << <blocksPerGrid2d, blockSize2d >> > (pbo, cam.resolution, iter, dev_image);
+    sendImageToPBO << <blocksPerGrid2d, blockSize2d >> > (pbo, cam.resolution, iter, dev_image, 
+        guiData ? guiData->ToneMappingMode : 0, guiData ? guiData->Exposure : 0, guiData ? guiData->Gamma : 1);
 
     cudaMemcpy(hst_scene->state.image.data(), dev_image,
         pixelcount * sizeof(glm::vec3), cudaMemcpyDeviceToHost);

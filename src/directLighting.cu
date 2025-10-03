@@ -2,6 +2,7 @@
 
 #include "environmentSampling.h"
 #include "glm/gtx/norm.hpp"
+#include "interactions.h"
 
 // Lambertian
 __device__ float lambert_pdf(const glm::vec3& n, const glm::vec3& wi) {
@@ -112,57 +113,73 @@ __device__ bool visible(const glm::vec3& P, const glm::vec3& Q,
     return true;
 }
 
-__device__ void addDirectLighting_NEEDiffuse(
+__device__ void addDirectLightingNEE(
     const glm::vec3& P,
     const glm::vec3& N,
     const glm::vec3& wo,
     const Material* __restrict__ materials,
     const Geom* __restrict__ geoms, int ngeoms,
     const int* __restrict__ lightIdx, int numLights,
-    const glm::vec3& albedo,
-    const glm::vec3& throughput,
+    const glm::vec3& albedoTimesThroughput,
+    float metallic, float roughness,
     int pixelIndex,
     glm::vec3* __restrict__ image,
     thrust::default_random_engine& rng,
     const EnvironmentMap* __restrict__ envMap)
 {
-    const glm::vec3 f = lambert_f(albedo);
+    // --- Diffuse BRDF ---
+    const glm::vec3 f_diff = albedoTimesThroughput / CUDART_PI_F;
 
-    // 1) Emitters in the scene
+    // --- Specular F0 ---
+    glm::vec3 F0 = glm::mix(glm::vec3(0.04f), albedoTimesThroughput, metallic);
+    float alpha = roughness * roughness;
+
+    // 1) Sample an emissive light (area lights)
     if (numLights > 0) {
         thrust::uniform_int_distribution<int> pick(0, numLights - 1);
         const int li = pick(rng);
         const Geom& Lg = geoms[lightIdx[li]];
         const Material& Lm = materials[Lg.materialid];
         if (Lm.emittance > 0.f) {
-            glm::vec3 Pl, Nl;
-            float area = 0.f;
-            if (Lg.type == SPHERE)
-                sampleSphereLight(Lg, rng, Pl, Nl, area);
-            else
-                sampleCubeLight(Lg, rng, Pl, Nl, area);
+            glm::vec3 Pl, Nl; float area = 0.f;
+            if (Lg.type == SPHERE) sampleSphereLight(Lg, rng, Pl, Nl, area);
+            else                   sampleCubeLight(Lg, rng, Pl, Nl, area);
 
-            const glm::vec3 wi = glm::normalize(Pl - P);
-            const float d2 = glm::length2(Pl - P);
-            const float cosS = fmaxf(0.f, glm::dot(N, wi));
-            const float cosL = fmaxf(0.f, glm::dot(Nl, -wi));
+            glm::vec3 wi = glm::normalize(Pl - P);
+            float d2 = glm::length2(Pl - P);
+            float cosS = fmaxf(0.f, glm::dot(N, wi));
+            float cosL = fmaxf(0.f, glm::dot(Nl, -wi));
 
-            if (cosS > 0.f && cosL > 0.f) {
-                const float pmfL = 1.f / float(numLights);
-                const float p_l = pmfL * (d2 / (cosL * fmaxf(1e-8f, area)));
-                const float p_b = lambert_pdf(N, wi);
+            if (cosS > 0.f && cosL > 0.f && visible(P, Pl, N, geoms, ngeoms)) {
+                // Microfacet specular eval
+                glm::vec3 H = glm::normalize(wi + wo);
+                float NoV = fmaxf(0.f, glm::dot(N, wo));
+                float NoL = fmaxf(0.f, glm::dot(N, wi));
+                float NoH = fmaxf(0.f, glm::dot(N, H));
+                float VoH = fmaxf(0.f, glm::dot(wo, H));
 
-                if (p_l > 0.f && p_b > 0.f && visible(P, Pl, N, geoms, ngeoms)) {
-                    const glm::vec3 Le = Lm.color * Lm.emittance;
-                    const float w_l = (p_l * p_l) / (p_l * p_l + p_b * p_b);
-                    const glm::vec3 contrib = throughput * f * Le * cosS * (w_l / p_l);
+                glm::vec3 F = Fresnel_Schlick(VoH, F0);
+                float D = D_GGX(NoH, alpha);
+                float G = G_SmithGGX(NoV, NoL, alpha);
+
+                glm::vec3 f_spec = (D * F * G) / fmaxf(4.f * NoV * NoL, 1e-4f);
+                glm::vec3 f = f_diff * (1.0f - metallic) + f_spec;
+
+                glm::vec3 Le = Lm.color * Lm.emittance;
+                float pmfL = 1.f / float(numLights);
+                float p_l = pmfL * (d2 / (cosL * fmaxf(1e-8f, area)));
+                float p_b = lambert_pdf(N, wi);
+
+                if (p_l > 0.f && p_b > 0.f) {
+                    float w_l = (p_l * p_l) / (p_l * p_l + p_b * p_b);
+                    glm::vec3 contrib = f * Le * cosS * (w_l / p_l);
                     atomicAddVec3(image, pixelIndex, contrib);
                 }
             }
         }
     }
 
-    // 2) Environment map as an area light
+    // 2) Environment map sampling
     if (envMap) {
         thrust::uniform_real_distribution<float> u01(0.f, 1.f);
         float u1 = u01(rng), u2 = u01(rng);
@@ -172,15 +189,25 @@ __device__ void addDirectLighting_NEEDiffuse(
         glm::vec3 Le_env = sampleEnvironmentMapImportance(*envMap, u1, u2, wi_env, pdf_env);
 
         if (pdf_env > 1e-6f) {
-            const float cosS = fmaxf(0.f, glm::dot(N, wi_env));
-            if (cosS > 0.f) {
-                const glm::vec3 Pl_far = P + wi_env * 1e6f;
-                if (visible(P, Pl_far, N, geoms, ngeoms)) {
-                    const float p_b = lambert_pdf(N, wi_env);
-                    const float w_l = (pdf_env * pdf_env) / (pdf_env * pdf_env + p_b * p_b + 1e-16f);
-                    const glm::vec3 contrib = throughput * f * Le_env * cosS * (w_l / pdf_env);
-                    atomicAddVec3(image, pixelIndex, contrib);
-                }
+            float cosS = fmaxf(0.f, glm::dot(N, wi_env));
+            if (cosS > 0.f && visible(P, P + wi_env * 1e6f, N, geoms, ngeoms)) {
+                glm::vec3 H = glm::normalize(wi_env + wo);
+                float NoV = fmaxf(0.f, glm::dot(N, wo));
+                float NoL = fmaxf(0.f, glm::dot(N, wi_env));
+                float NoH = fmaxf(0.f, glm::dot(N, H));
+                float VoH = fmaxf(0.f, glm::dot(wo, H));
+
+                glm::vec3 F = Fresnel_Schlick(VoH, F0);
+                float D = D_GGX(NoH, alpha);
+                float G = G_SmithGGX(NoV, NoL, alpha);
+
+                glm::vec3 f_spec = (D * F * G) / fmaxf(4.f * NoV * NoL, 1e-4f);
+                glm::vec3 f = f_diff * (1.0f - metallic) + f_spec;
+
+                float p_b = lambert_pdf(N, wi_env);
+                float w_l = (pdf_env * pdf_env) / (pdf_env * pdf_env + p_b * p_b + 1e-16f);
+                glm::vec3 contrib = f * Le_env * cosS * (w_l / pdf_env);
+                atomicAddVec3(image, pixelIndex, contrib);
             }
         }
     }

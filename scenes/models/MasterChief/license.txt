@@ -1,0 +1,11 @@
+Model Information:
+* title:	Halo: Infinite  Master Chief [REMASTERED]
+* source:	https://sketchfab.com/3d-models/halo-infinite-master-chief-remastered-902c22cdb3df4a15908cf45568a253e1
+* author:	Abel (https://sketchfab.com/abel76)
+
+Model License:
+* license type:	CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)
+* requirements:	Author must be credited. No commercial use.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Halo: Infinite  Master Chief [REMASTERED]" (https://sketchfab.com/3d-models/halo-infinite-master-chief-remastered-902c22cdb3df4a15908cf45568a253e1) by Abel (https://sketchfab.com/abel76) licensed under CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)

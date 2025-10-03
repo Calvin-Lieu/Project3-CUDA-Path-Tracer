@@ -8,6 +8,12 @@
 
 #include <thrust/random.h>
 
+#define MAX_MATERIALS 128
+
+__device__ inline int gDiffuseCounts[MAX_MATERIALS];
+__device__ inline int gSpecularCounts[MAX_MATERIALS];
+__device__ inline int gRefractiveCounts[MAX_MATERIALS];
+
 // CHECKITOUT
 /**
  * Computes a cosine-weighted random direction in a hemisphere.
@@ -50,7 +56,9 @@ __device__ void scatterRay(
     glm::vec3 intersect,
     glm::vec3 normal,
     const Material& m,
-    thrust::default_random_engine& rng);
+    thrust::default_random_engine& rng,
+    int depth,
+    int materialId);
 
 __host__ __device__ inline bool isDiffuse(const Material& m) {
     return (m.hasReflective < 0.5f) && (m.hasRefractive < 0.5f);
