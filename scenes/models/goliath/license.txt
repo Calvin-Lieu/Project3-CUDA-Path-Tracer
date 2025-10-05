@@ -1,0 +1,11 @@
+Model Information:
+* title:	Goliath
+* source:	https://sketchfab.com/3d-models/goliath-9c49bdb541724575baa8b1361bc68bed
+* author:	Vasian-Digital3D (https://sketchfab.com/Vasian-Digital3D)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Goliath" (https://sketchfab.com/3d-models/goliath-9c49bdb541724575baa8b1361bc68bed) by Vasian-Digital3D (https://sketchfab.com/Vasian-Digital3D) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

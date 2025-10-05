@@ -7,7 +7,7 @@ BVH BVHBuilder::build(const std::vector<Geom>& geoms, const std::vector<MeshData
     bvh.maxDepth = 0;
 
     std::vector<BVHPrimitive> primitives;
-
+     
     // Build primitive list: individual triangles for meshes, whole geoms for others
     for (int g = 0; g < geoms.size(); g++) {
         if (geoms[g].type == TRIANGLE_MESH) {
@@ -32,7 +32,7 @@ BVH BVHBuilder::build(const std::vector<Geom>& geoms, const std::vector<MeshData
         return bvh;
     }
 
-    std::cout << "Building BVH with " << primitives.size() << " primitives...\n";
+    //std::cout << "Building BVH with " << primitives.size() << " primitives...\n";
 
     std::vector<BVHNode> nodes;
     std::vector<int> indices(primitives.size());
@@ -55,8 +55,6 @@ BVH BVHBuilder::build(const std::vector<Geom>& geoms, const std::vector<MeshData
         orderedPrimitives.size() * sizeof(BVHPrimitive), cudaMemcpyHostToDevice);
 
     bvh.nodeCount = (int)nodes.size();
-
-    printf("BVH built: %d nodes, max depth %d\n", bvh.nodeCount, bvh.maxDepth);
 
     return bvh;
 }

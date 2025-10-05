@@ -118,6 +118,9 @@ struct Camera
     glm::vec3 right;
     glm::vec2 fov;
     glm::vec2 pixelLength;
+
+    float lensRadius;      // Aperture size (0 = pinhole)
+    float focalDistance;   // Distance to focal plane
 };
 
 struct RenderState

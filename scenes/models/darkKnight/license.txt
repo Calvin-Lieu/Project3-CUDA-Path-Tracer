@@ -1,0 +1,11 @@
+Model Information:
+* title:	The Dark Knight - Infinity Blade
+* source:	https://sketchfab.com/3d-models/the-dark-knight-infinity-blade-d8e45261895747a3833e801ecda12bd6
+* author:	Catholomew (https://sketchfab.com/Catholomew)
+
+Model License:
+* license type:	CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)
+* requirements:	Author must be credited. No commercial use.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "The Dark Knight - Infinity Blade" (https://sketchfab.com/3d-models/the-dark-knight-infinity-blade-d8e45261895747a3833e801ecda12bd6) by Catholomew (https://sketchfab.com/Catholomew) licensed under CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)

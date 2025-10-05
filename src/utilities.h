@@ -20,7 +20,7 @@ class GuiDataContainer
 public:
     GuiDataContainer() : TracedDepth(0) {}
     int TracedDepth;
-    bool SortByMaterial;
+    bool SortByMaterial = false;
     bool UseRussianRoulette = true;
     bool UseDirectLighting = true;
     bool UseBVH = true;
@@ -28,6 +28,9 @@ public:
     int ToneMappingMode = 0;
     float Exposure = 0.0f;
     float Gamma = 1.3f;
+    float LensRadius = 0.0f;
+    float FocalDistance = 1.0f;
+    bool AutoFocus = true;
 };
 
 namespace utilityCore

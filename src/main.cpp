@@ -298,6 +298,37 @@ void RenderImGui()
     ImGui::Text("Tone Mapping");
     const char* modes[] = { "None", "Reinhard", "ACES" };
     ImGui::Combo("Mode", &guiData->ToneMappingMode, modes, IM_ARRAYSIZE(modes));
+    ImGui::Separator();
+    ImGui::Text("Depth of Field");
+
+    if (ImGui::InputFloat("Aperture Size", &guiData->LensRadius, 0.01f, 0.1f, "%.3f")) {
+        guiData->LensRadius = glm::clamp(guiData->LensRadius, 0.0f, 1.0f);
+        scene->state.camera.lensRadius = guiData->LensRadius;
+        iteration = 0;
+    }
+
+    if (ImGui::InputFloat("Focal Distance", &guiData->FocalDistance, 0.1f, 1.0f, "%.2f")) {
+        guiData->FocalDistance = glm::max(guiData->FocalDistance, 0.1f);
+        scene->state.camera.focalDistance = guiData->FocalDistance;
+        iteration = 0;
+    }
+
+    if (ImGui::Button("Pinhole (No DOF)")) {
+        guiData->LensRadius = 0.0f;
+        scene->state.camera.lensRadius = 0.0f;
+        iteration = 0;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Shallow DOF")) {
+        guiData->LensRadius = 0.1f;
+        scene->state.camera.lensRadius = 0.1f;
+        iteration = 0;
+    }
+
+    if (guiData->LensRadius > 0.0f) {
+        float fNumber = guiData->FocalDistance / (2.0f * guiData->LensRadius);
+        ImGui::Text("f-number: f/%.1f", fNumber);
+    }
     ImGui::End();
 
 

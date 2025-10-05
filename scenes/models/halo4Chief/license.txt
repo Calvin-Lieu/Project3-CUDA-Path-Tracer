@@ -1,0 +1,11 @@
+Model Information:
+* title:	Halo 4 Master Chief
+* source:	https://sketchfab.com/3d-models/halo-4-master-chief-f1a475ae40d04666b08a4bc02fff0cae
+* author:	irons3th (https://sketchfab.com/irons3th)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Halo 4 Master Chief" (https://sketchfab.com/3d-models/halo-4-master-chief-f1a475ae40d04666b08a4bc02fff0cae) by irons3th (https://sketchfab.com/irons3th) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

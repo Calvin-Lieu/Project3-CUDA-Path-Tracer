@@ -598,7 +598,8 @@ void GeometryLoader::processGLTFMesh(const tinygltf::Model& model,
 
 void CameraLoader::loadFromJSON(const json& cameraData,
     Camera& camera,
-    RenderState& state) {
+    RenderState& state)
+{
     camera.resolution.x = cameraData["RES"][0];
     camera.resolution.y = cameraData["RES"][1];
     float fovy = cameraData["FOVY"];
@@ -621,6 +622,17 @@ void CameraLoader::loadFromJSON(const json& cameraData,
     camera.right = glm::normalize(glm::cross(camera.view, camera.up));
     camera.pixelLength = glm::vec2(2 * xscaled / (float)camera.resolution.x,
         2 * yscaled / (float)camera.resolution.y);
+
+    // DOF
+    camera.lensRadius = 0.0f;      // Default to pinhole
+    camera.focalDistance = 1.0f;   // Default focal distance
+
+    if (cameraData.contains("LENS_RADIUS")) {
+        camera.lensRadius = cameraData["LENS_RADIUS"];
+    }
+    if (cameraData.contains("FOCAL_DISTANCE")) {
+        camera.focalDistance = cameraData["FOCAL_DISTANCE"];
+    }
 
     int arraylen = camera.resolution.x * camera.resolution.y;
     state.image.resize(arraylen);

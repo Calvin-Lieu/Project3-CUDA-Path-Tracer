@@ -48,11 +48,9 @@ set(GLM_ROOT_DIR "${CMAKE_SOURCE_DIR}/external")
 find_package(GLM REQUIRED)
 include_directories(${GLM_INCLUDE_DIRS})
 
-# OpenImageDenoise include path
 include_directories(${EXTERNAL}/include)
-
-# OpenImageDenoise lib path
 link_directories(${EXTERNAL}/lib)
+
 set(headers
     src/image.h
     src/interactions.h

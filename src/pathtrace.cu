@@ -6,7 +6,6 @@
 #include <climits>
 #include <iostream>
 #include <utility>
-#include <thrust/execution_policy.h>
 #include <thrust/random.h>
 #include <thrust/remove.h>
 #include <thrust/sort.h>
@@ -15,8 +14,6 @@
 #include <thrust/for_each.h>
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/tuple.h>
-#include <thrust/device_ptr.h>
-#include <thrust/binary_search.h>
 #include <stb_image.h>
 #include <OpenImageDenoise/oidn.h>
 
@@ -35,7 +32,7 @@
 #include "environmentSampling.h"
 
 #define ERRORCHECK 1
-
+#define DENOISE_INT 2
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define checkCUDAError(msg) checkCUDAErrorFn(msg, FILENAME, __LINE__)
 
@@ -434,7 +431,7 @@ void pathtraceInit(Scene* scene)
             stbi_image_free(data);
 
             std::cout << "Environment map loaded: " << width << "x" << height << "\n";
-            std::cout << "Total luminance: " << hostEnvMap.totalLuminance << "\n";
+            //std::cout << "Total luminance: " << hostEnvMap.totalLuminance << "\n";
         }
     }
 
@@ -547,13 +544,38 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
         float jx = (sx + u01(rng)) / S - 0.5f;
         float jy = (sy + u01(rng)) / S - 0.5f;
 
-        segment.ray.direction = glm::normalize(
+        glm::vec3 rayDir = glm::normalize(
             cam.view
             - cam.right * cam.pixelLength.x * ((x + jx) - cam.resolution.x * 0.5f)
             - cam.up * cam.pixelLength.y * ((y + jy) - cam.resolution.y * 0.5f));
 
+        segment.ray.origin = cam.position;
+        segment.ray.direction = rayDir;
+
+        if (cam.lensRadius > 0.0f && cam.focalDistance > 0.0f) {
+            // Sample point on lens (concentric disk)
+            float r1 = u01(rng);
+            float r2 = u01(rng);
+            float theta = 2.0f * PI * r1;
+            float r = sqrtf(r2);
+            glm::vec2 diskSample = r * glm::vec2(cosf(theta), sinf(theta));
+            glm::vec2 pLens = cam.lensRadius * diskSample;
+
+            // Find intersection with focal plane
+            // Focal plane is perpendicular to view at distance focalDistance
+            glm::vec3 viewNorm = glm::normalize(cam.view);
+            float t = cam.focalDistance / glm::dot(rayDir, viewNorm);
+            glm::vec3 pFocus = cam.position + rayDir * t;
+
+            // Ray from lens point through focal point
+            segment.ray.origin = cam.position + pLens.x * cam.right + pLens.y * cam.up;
+            segment.ray.direction = glm::normalize(pFocus - segment.ray.origin);
+        }
+
         segment.pixelIndex = index;
         segment.remainingBounces = traceDepth;
+
+
     }
 }
 
@@ -1011,6 +1033,7 @@ void pathtrace(uchar4* pbo, int frame, int iter)
     // Denoise on GPU (no CPU copy)
     glm::vec3* displayImage = dev_image_raw;
     if (guiData && guiData->UseDenoiser) {
+        if (iter % DENOISE_INT != 0) return;
         oidnExecuteFilter(oidnFilter);
         checkOIDNError(oidnDevice);
         displayImage = dev_image_denoised;
