@@ -181,14 +181,121 @@ Supports glTF extensions:
 - `KHR_materials_volume` - Subsurface parameters
 - `KHR_materials_ior` - Custom index of refraction
 
+### Post-Processing
+
+#### Real-Time Denoising
+![Denoiser Comparison](img/denoiser.png)
+*Left: Raw 50 spp | Right: Denoised 50 spp*
+
+Integration of Intel Open Image Denoise (OIDN) running directly on CUDA device. Uses multiple feature buffers for improved quality:
+
+**Buffers:**
+- **Beauty**: Raw accumulated radiance (HDR)
+- **Albedo**: First-hit surface color (averaged per iteration)
+- **Normals**: First-hit world-space normals (averaged per iteration)
+
+**Implementation:**
+- Buffers accumulated separately throughout rendering
+- Averaged before passing to denoiser
+- Zero-copy shared buffers between CUDA and OIDN (no CPU transfer)
+- Filter executes on GPU asynchronously
+
+**Performance:**
+//TODO
+- Enables real-time preview during long renders
+- Toggle on/off in GUI for comparison
+
+#### Tone Mapping & Exposure Control
+![Tone Mapping Comparison](img/tonemapping_modes.png)
+*Tone mapping operators: None, Reinhard, ACES*
+
+HDR to LDR conversion with multiple tone mapping operators:
+
+**Operators:**
+- **None**: Linear mapping (for HDR output workflows)
+- **Reinhard**: `L_out = L_in / (1 + L_in)` - Simple, preserves color ratios
+- **ACES Filmic**: Industry-standard curve used in film production, handles highlights gracefully
+
+**Controls:**
+- Exposure adjustment: ±5 EV stops (multiply by `2^exposure`)
+- Gamma correction: 1.0-2.4 (sRGB standard is 2.2)
+- Real-time toggle between operators
+
+All tone mapping happens in the final display kernel after accumulation.
+
+### Camera Effects
+
+#### Depth of Field
+![Depth of Field Showcase](img/dof_examples.png)
+
+Physically-based thin lens camera model simulating aperture and focal plane effects.
+
+**Parameters:**
+- **Lens Radius** (aperture): Controls blur amount
+  - 0.0 = Pinhole (infinite depth of field)
+  - Larger values = shallower depth of field
+- **Focal Distance**: Distance to plane of sharp focus
+
+**Implementation:**
+- Sample point on lens using concentric disk mapping
+- Cast ray from lens sample through focal point
+- All rays converge at focal distance → sharp
+- Objects at other distances blur proportionally
+
+**f-number calculation:** `f = focal_distance / (2 × lens_radius)`
+
+**Performance:** 
+//TODO
+
+
 ### Performance Analysis //TODO
 
 #### Material Sorting
 ![Material Sorting Performance](img/material_sorting.png)
 
-Stream compaction by material type using Thrust sorting primitives. Groups rays intersecting the same material contiguously in memory before shading, improving warp coherence.
+Stream compaction by material type using Thrust sorting primitives. Groups rays intersecting the same material contiguously in memory before shading, improving warp coherence and reducing thread divergence.
+
+**Implementation:**
+- Extract material IDs from intersection results
+- Sort ray indices by material ID using `thrust::sort_by_key`
+- Gather rays and intersections into sorted order
+- Execute shading kernel on sorted data
 
 **Performance Impact:**
+Actually negative due to high sorting overhead, a much greater number of material types would be required to see nay performance gains.
+||Without Sort| With Sort|
+|------|------|
+|fps|115|73|
+
+#### Russian Roulette Path Termination
+![Russian Roulette Graph](img/rr_performance.png)
+
+Stochastic early termination of low-contribution paths. Paths with low throughput are probabilistically terminated while remaining paths are weighted to maintain unbiased results.
+
+**Algorithm:**
+- Starts at bounce depth 3
+- Survival probability = `clamp(max(throughput), 0.2, 0.95)`
+- Surviving paths scaled by `1.0 / survival_probability`
+
+**Performance:**
+//TODO
+#### BVH Acceleration Structure
+![BVH Visualization](img/bvh_debug.png)
+
+Bounding Volume Hierarchy for accelerated ray-scene intersection testing. Binary tree built on CPU.
+
+**Implementation:**
+- Recursive top-down construction
+- Each node stores AABB bounds and child pointers
+- Leaf nodes contain primitive lists (triangles or geometry)
+- GPU traversal uses explicit 64-element stack (no recursion)
+
+**Performance (10K triangle mesh):**
+||Without BVH| With BVH|
+|------|------|
+|fps|2|30.5|
+
+**Speedup: 15x** for complex geometry. Benefit scales with scene complexity.
 
 ## Third-Party Code & Libraries
 
