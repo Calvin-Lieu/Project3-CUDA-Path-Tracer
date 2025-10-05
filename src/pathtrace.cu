@@ -552,6 +552,7 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
         segment.ray.origin = cam.position;
         segment.ray.direction = rayDir;
 
+        // DOF
         if (cam.lensRadius > 0.0f && cam.focalDistance > 0.0f) {
             // Sample point on lens (concentric disk)
             float r1 = u01(rng);
@@ -976,7 +977,7 @@ void pathtrace(uchar4* pbo, int frame, int iter)
         const int useNEE = (guiData && guiData->UseDirectLighting) ? 1 : 0;
 
         // Sort by material for better coherence
-        bool doSort = !guiData ? true : guiData->SortByMaterial;
+        bool doSort = !guiData ? false : guiData->SortByMaterial;
         if (doSort) {
             buildMaterialKeys << <numblocksPathSegmentTracing, blockSize1d >> > (
                 num_paths, dev_intersections, dev_matKeys);
