@@ -37,7 +37,7 @@ A GPU-accelerated Monte Carlo path tracer built with CUDA, featuring physically-
 | ![](./img/chief.png) |
 ---
 ## Feature List
-- Diffuse BSDF, Specular/GGC Microfacet BRDF
+- Diffuse BSDF, Specular/GGX Microfacet BRDF
 - Dielectric BTDF for refraction
 - Depth of Field
 - Direct Lighting with Next Event Estimation
@@ -133,8 +133,6 @@ Multiple BSDF implementations:
 - **Dielectric Transmission**: Fresnel-based refraction using Schlick's approximation for glass, water, and other transmissive materials with configurable index of refraction
 
 #### Stochastic Antialiasing
-![Antialiasing Comparison](img/antialiasing.png)
-*Left: No antialiasing | Right: 4x4 stratified sampling*
 
 Implements 4x4 stratified jitter sampling that cycles every 16 iterations. Distributes samples across a grid pattern within each pixel, reducing aliasing artifacts while maintaining unbiased Monte Carlo integration.
 
@@ -147,14 +145,12 @@ Implements 4x4 stratified jitter sampling that cycles every 16 iterations. Distr
 Explicit direct lighting using multiple importance sampling. Combines BRDF importance sampling with light source sampling, using the balance heuristic to weight contributions. 
 
 #### Environment Map Importance Sampling
-![Environment Lighting](img/environment.png)
 
 HDR environment map lighting with importance sampling via precomputed CDFs. Builds marginal and conditional probability distributions for sampling bright regions of the skybox preferentially.
 
 ### Material System
 
 #### PBR Texture Mapping
-![Texture Mapping](img/textures.png)
 
 Full glTF 2.0 PBR texture support:
 - **Base Color Textures**: Albedo/diffuse color maps
@@ -166,7 +162,7 @@ Full glTF 2.0 PBR texture support:
 Texture fetches add overhead but dramatically improve visual quality.
 
 #### glTF 2.0 Mesh Loading
-![glTF Model](img/gltf_model.png)
+![glTF Model](img/flight_helmet.png)
 
 Complete glTF 2.0 scene loader supporting:
 - Hierarchical scene graph traversal
@@ -184,7 +180,9 @@ Supports glTF extensions:
 ### Post-Processing
 
 #### Real-Time Denoising
-![Denoiser Comparison](img/denoiser.png)
+|Without Denoising|With Denoising|
+|---------|---------|
+|![](img/not_denoised.png)|![](img/denoised.png)|
 *Left: Raw 50 spp | Right: Denoised 50 spp*
 
 Integration of Intel Open Image Denoise (OIDN) running directly on CUDA device. Uses multiple feature buffers for improved quality:
@@ -200,21 +198,19 @@ Integration of Intel Open Image Denoise (OIDN) running directly on CUDA device. 
 - Zero-copy shared buffers between CUDA and OIDN (no CPU transfer)
 - Filter executes on GPU asynchronously
 
-**Performance:**
-//TODO
-- Enables real-time preview during long renders
-- Toggle on/off in GUI for comparison
+See Performance section for analysis.
 
 #### Tone Mapping & Exposure Control
-![Tone Mapping Comparison](img/tonemapping_modes.png)
-*Tone mapping operators: None, Reinhard, ACES*
+|None|Reinhard|ACES|
+|---------|---------|---------|
+|![](img/notone.png)|![](img/reinhard.png)|![](img/aces.png)|
 
 HDR to LDR conversion with multiple tone mapping operators:
 
 **Operators:**
-- **None**: Linear mapping (for HDR output workflows)
-- **Reinhard**: `L_out = L_in / (1 + L_in)` - Simple, preserves color ratios
-- **ACES Filmic**: Industry-standard curve used in film production, handles highlights gracefully
+- **None**: Linear mapping
+- **Reinhard**: `L_out = L_in / (1 + L_in)` - Simple, preserves color ratios - a bit dark however, adjust gamma/exposure to achieve better result
+- **ACES Filmic**: Industry-standard curve used in film production, handles highlights gracefully - a little bright?
 
 **Controls:**
 - Exposure adjustment: ±5 EV stops (multiply by `2^exposure`)
@@ -226,7 +222,8 @@ All tone mapping happens in the final display kernel after accumulation.
 ### Camera Effects
 
 #### Depth of Field
-![Depth of Field Showcase](img/dof_examples.png)
+|---------|---------|
+|![](img/with_dof.png)|![](img/without_dof.png)|
 
 Physically-based thin lens camera model simulating aperture and focal plane effects.
 
@@ -244,16 +241,14 @@ Physically-based thin lens camera model simulating aperture and focal plane effe
 
 **f-number calculation:** `f = focal_distance / (2 × lens_radius)`
 
-**Performance:** 
-//TODO
+### Performance Analysis
 
+This section analyzes the measured performance of the CUDA path tracer with reference to **GPU programming concepts**, focusing on the architectural principles that explain the observed trends.
 
-### Performance Analysis //TODO
+---
 
 #### Material Sorting
-![Material Sorting Performance](img/material_sorting.png)
-
-Stream compaction by material type using Thrust sorting primitives. Groups rays intersecting the same material contiguously in memory before shading, improving warp coherence and reducing thread divergence.
+![Material Sorting Performance](img/material_sort_performance.png)
 
 **Implementation:**
 - Extract material IDs from intersection results
@@ -262,10 +257,15 @@ Stream compaction by material type using Thrust sorting primitives. Groups rays 
 - Execute shading kernel on sorted data
 
 **Performance Impact:**
-Actually negative due to high sorting overhead, a much greater number of material types would be required to see nay performance gains.
-||Without Sort| With Sort|
-|------|------|
-|fps|115|73|
+Material sorting is designed to improve **warp coherence** during shading:
+- Threads in the same warp process similar BRDFs → fewer divergent branches.
+
+However, the sorting itself (`thrust::sort_by_key` + `thrust::gather`) introduces an **O(N log N)** overhead per bounce, adding multiple global memory passes.
+- Sorting improves control-flow coherence but breaks spatial locality.
+- In small or simple workloads, GPU warp occupancy is already high, so sorting overhead dominates.
+
+**Result:**  
+Slight performance loss (4–8%) — expected in low-material-count scenes.
 
 #### Russian Roulette Path Termination
 ![Russian Roulette Graph](img/rr_performance.png)
@@ -278,9 +278,22 @@ Stochastic early termination of low-contribution paths. Paths with low throughpu
 - Surviving paths scaled by `1.0 / survival_probability`
 
 **Performance:**
-//TODO
+On the GPU:
+- Fewer rays → less total computation.
+- But terminated rays cause **warp underutilization**, since inactive threads still occupy lanes.
+
+**Open scenes** (with fewer bounces) gain little because rays typically escape quickly.  
+**Closed scenes** (with many reflections) gain significantly as RR prunes deep, low-energy paths.
+
+**GPU tradeoff:**
+- Reduces global memory writes and ALU instructions.
+- May create *irregular control flow*, impacting SIMD efficiency.
+
+**Result:**  
+10% speedup for open and ~34% for closed scenes matches expected RR impact — greater savings in bounce-heavy environments.
+
 #### BVH Acceleration Structure
-![BVH Visualization](img/bvh_debug.png)
+![BVH Visualization](img/bvh_performance_combined.png)
 
 Bounding Volume Hierarchy for accelerated ray-scene intersection testing. Binary tree built on CPU.
 
@@ -290,12 +303,36 @@ Bounding Volume Hierarchy for accelerated ray-scene intersection testing. Binary
 - Leaf nodes contain primitive lists (triangles or geometry)
 - GPU traversal uses explicit 64-element stack (no recursion)
 
-**Performance (10K triangle mesh):**
-||Without BVH| With BVH|
-|------|------|
-|fps|2|30.5|
+The **Bounding Volume Hierarchy (BVH)** drastically reduces per-ray intersection cost from *O(N)* to *O(log N)*.  
+Without BVH, each ray must test every object in the scene, leading to:
+- **Severe branch divergence** across warps (rays traverse different objects).
+- **Uncoalesced global memory access**.
+- Poor **SIMT (Single Instruction, Multiple Thread)** utilization.
 
-**Speedup: 15x** for complex geometry. Benefit scales with scene complexity.
+BVH traversal restores **spatial coherence**, since nearby rays traverse similar node paths.  
+This improves:
+- **Warp execution efficiency**.
+- **Cache locality** for geometry data.
+- **Memory coalescing** during traversal.
+
+**Result:**  
+The massive 40×+ acceleration (2224 → 51.7 ms open, 4000 → 88 ms closed) is expected and demonstrates how BVH structures align perfectly with the GPU’s SIMT model.
+Benefit scales with scene complexity.
+
+#### Denoiser Performance
+![Denoiser Graph](img/denoiser_performance_combined.png)
+
+The **denoiser** adds an additional CUDA kernel (via OIDN) that reads and writes full-resolution float3 buffers (color, normal, albedo).  
+This workload is:
+- **Bandwidth-bound**, not compute-bound.
+- Dominated by **global memory traffic** and **synchronization overhead**.
+
+At shorter intervals (denoising every 2 frames), GPU bandwidth is stressed more often, explaining the 5–6 ms slowdown in closed scenes and minor 1–2 ms slowdown in open scenes.
+
+The OIDN filter efficiently uses CUDA streams to overlap work, but since it performs multiple full-frame memory passes, it scales with **memory bandwidth**, not SM throughput.
+
+**Result:**  
+The denoiser’s overhead is small but measurable — higher for complex (closed) scenes due to larger spatial frequency content. The improvement in image quality however, is well worth the performance tradeoff.
 
 ## Third-Party Code & Libraries
 
