@@ -221,6 +221,7 @@ All tone mapping happens in the final display kernel after accumulation.
 ### Camera Effects
 
 #### Depth of Field
+|With DOF|Without DOF|
 |---------|---------|
 |![](img/with_dof.png)|![](img/without_dof.png)|
 
