@@ -359,4 +359,4 @@ All third-party code and assets are used in accordance with their respective lic
 - [PBRT Textbook](https://pbr-book.org/4ed/contents)
 - https://cseweb.ucsd.edu/classes/sp17/cse168-a/CSE168_07_Random.pdf
 - https://www.scratchapixel.com/lessons/3d-basic-rendering/ray-tracing-rendering-a-triangle/moller-trumbore-ray-triangle-intersection.html
-- Ray tracing in one weekend: https://raytracing.github.io/
+- [Ray tracing in one weekend](https://raytracing.github.io/)
