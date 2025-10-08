@@ -160,7 +160,7 @@ Full glTF 2.0 PBR texture support:
 Texture fetches add overhead but dramatically improve visual quality.
 
 #### glTF 2.0 Mesh Loading
-![glTF Model](img/flight_helmet.png)
+![glTF Model](img/glass_dragon.png)
 
 Complete glTF 2.0 scene loader supporting:
 - Hierarchical scene graph traversal
@@ -352,3 +352,11 @@ This project uses the following third-party libraries:
 - 3D models from [Sketchfab](https://sketchfab.com/)
 
 All third-party code and assets are used in accordance with their respective licenses.
+
+### Sources:
+https://64.github.io/tonemapping/
+https://graphics.stanford.edu/courses/cs348b-03/papers/veach-chapter9.pdf
+[PBRT Textbook](https://pbr-book.org/4ed/contents)
+https://cseweb.ucsd.edu/classes/sp17/cse168-a/CSE168_07_Random.pdf
+https://www.scratchapixel.com/lessons/3d-basic-rendering/ray-tracing-rendering-a-triangle/moller-trumbore-ray-triangle-intersection.html
+Ray tracing in one weekend: https://raytracing.github.io/
