@@ -42,25 +42,12 @@
     },
     "Objects": [
         {
-            "TYPE": "sphere",
-            "MATERIAL": "glass",
-            "TRANS": [ 0.0, -0.5, 0.0 ],
-            "ROTAT": [ 0.0, 0.0, 0.0 ],
-            "SCALE": [ 1.0, 1.0, 1.0 ]
-        },
-        {
-            "TYPE": "sphere",
-            "MATERIAL": "metal_gold",
-            "TRANS": [ 0.0, -0.5, -3.0 ],
-            "ROTAT": [ 0.0, 0.0, 0.0 ],
-            "SCALE": [ 1.0, 1.0, 1.0 ]
-        },
-        {
-            "TYPE": "sphere",
-            "MATERIAL": "glass",
-            "TRANS": [ 0.0, -0.5, -6.0 ],
-            "ROTAT": [ 0.0, 0.0, 0.0 ],
-            "SCALE": [ 1.0, 1.0, 1.0 ]
+            "TYPE": "gltf",
+            "FILE": "../scenes/models/blue_chief/scene.gltf",
+            "MATERIAL": "white",
+            "TRANS": [ 0.0, -2.0, 0.0 ],
+            "ROTAT": [ 90.0, 180.0, 0.0 ],
+            "SCALE": [ 2.0, 2.0, 2.0 ]
         }
     ]
 }

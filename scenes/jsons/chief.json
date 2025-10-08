@@ -29,7 +29,7 @@
     "Objects": [
         {
             "TYPE": "gltf",
-            "FILE": "../scenes/models/vipers_helmet/scene.gltf",
+            "FILE": "../scenes/models/MasterChief/scene.gltf",
             "MATERIAL": "white",
             "TRANS": [ 0.0, -3.0, 10.0 ],
             "ROTAT": [ 90.0, 0.0, 180.0 ],
