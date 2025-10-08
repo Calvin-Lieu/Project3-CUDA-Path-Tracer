@@ -151,7 +151,8 @@ HDR environment map lighting with importance sampling via precomputed CDFs. Buil
 #### PBR Texture Mapping
 |Without Texture Mapping|With Texture Mapping|
 |---------|---------|
-|![](img/no_texture__map.png)|![](img/with_texture_map.png)|
+|![](img/no_texture_map.png)|![](img/with_texture_map.png)|
+
 Full glTF 2.0 PBR texture support:
 - **Base Color Textures**: Albedo/diffuse color maps
 - **Metallic-Roughness Textures**: Packed metallic (B) and roughness (G) channels
