@@ -129,7 +129,7 @@ Scenes are defined in JSON format with the following structure:
 
 Multiple BSDF implementations: 2x Diffuse, Specular Reflection, Microfacet Reflection, Refraction
 - **Lambertian Diffuse**: Cosine-weighted hemisphere sampling for perfectly diffuse surfaces
-- **GGX Microfacet**: Cook-Torrance specular BRDF with importance sampling
+- **GGX Microfacet**: Cook-Torrance specular BRDF with importance sampling - Microfacet reflection needs tuning for higher roughness
 - **Dielectric Transmission**: Fresnel-based refraction using Schlick's approximation for glass, water, and other transmissive materials with configurable index of refraction
 
 #### Stochastic Antialiasing
@@ -139,9 +139,8 @@ Implements 4x4 stratified jitter sampling that cycles every 16 iterations. Distr
 ### Lighting & Sampling
 
 #### Next Event Estimation (Direct Lighting)
-*Left: Path tracing only (500 spp) | Right: With NEE (500 spp)*
 
-Explicit direct lighting using multiple importance sampling. Combines BRDF importance sampling with light source sampling, using the balance heuristic to weight contributions. 
+Explicit direct lighting using multiple importance sampling. Combines BRDF importance sampling with light source sampling, using the balance heuristic to weight contributions. NB: Not entirely sure if this is working properly...
 
 #### Environment Map Importance Sampling
 
