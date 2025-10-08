@@ -24,7 +24,7 @@ A GPU-accelerated Monte Carlo path tracer built with CUDA, featuring physically-
 | :---------------------------------: |
 | ![](./img/dark_knight.png) |
 
-|          Goliath            |
+|           Goliath           |
 | :-------------------------: |
 | ![](./img/goliath.png) |
 
@@ -127,7 +127,7 @@ Scenes are defined in JSON format with the following structure:
 #### Physically-Based Materials
 ![Materials Showcase](img/materials.png)
 
-Multiple BSDF implementations:
+Multiple BSDF implementations: 2x Diffuse, Specular Reflection, Microfacet Reflection, Refraction
 - **Lambertian Diffuse**: Cosine-weighted hemisphere sampling for perfectly diffuse surfaces
 - **GGX Microfacet**: Cook-Torrance specular BRDF with importance sampling
 - **Dielectric Transmission**: Fresnel-based refraction using Schlick's approximation for glass, water, and other transmissive materials with configurable index of refraction
@@ -139,7 +139,6 @@ Implements 4x4 stratified jitter sampling that cycles every 16 iterations. Distr
 ### Lighting & Sampling
 
 #### Next Event Estimation (Direct Lighting)
-![NEE Comparison](img/nee_comparison.png)
 *Left: Path tracing only (500 spp) | Right: With NEE (500 spp)*
 
 Explicit direct lighting using multiple importance sampling. Combines BRDF importance sampling with light source sampling, using the balance heuristic to weight contributions. 
@@ -203,7 +202,7 @@ See Performance section for analysis.
 #### Tone Mapping & Exposure Control
 |None|Reinhard|ACES|
 |---------|---------|---------|
-|![](img/notone.png)|![](img/reinhard.png)|![](img/aces.png)|
+|![](img/notone.png)|![](img/reinhard_2.png)|![](img/aces_2.png)|
 
 HDR to LDR conversion with multiple tone mapping operators:
 
@@ -350,6 +349,6 @@ This project uses the following third-party libraries:
 ### Third-Party Assets
 
 - HDR environment maps from [Poly Haven](https://polyhaven.com/)
-- 3D models from [Sketchfab](https://sketchfab.com/) (see individual model credits)
+- 3D models from [Sketchfab](https://sketchfab.com/)
 
 All third-party code and assets are used in accordance with their respective licenses.
