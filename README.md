@@ -242,7 +242,7 @@ Physically-based thin lens camera model simulating aperture and focal plane effe
 
 ### Performance Analysis
 
-This section analyzes the measured performance of the CUDA path tracer with reference to **GPU programming concepts**, focusing on the architectural principles that explain the observed trends.
+This section analyzes the measured performance of the CUDA path tracer with reference to **GPU programming concepts**, focusing on the architectural principles that explain the observed trends. Uses a gltf model with ~45k triangles, closed cornell scene and open scene with hdr lighting.
 
 ---
 
