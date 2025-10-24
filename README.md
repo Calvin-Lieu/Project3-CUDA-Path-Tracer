@@ -1,7 +1,7 @@
 CUDA Path Tracer
 ======================
 
-**University of Pennsylvania, CIS 565: GPU Programming and Architecture, Project 2**
+**University of Pennsylvania, CIS 565: GPU Programming and Architecture, Project 3**
 
 * Calvin Lieu
   * [LinkedIn](www.linkedin.com/in/calvin-lieu-91912927b)
